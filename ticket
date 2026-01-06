@@ -477,23 +477,27 @@ cmd_dep() {
 cmd_ls() {
     [[ ! -d "$TICKETS_DIR" ]] && return 0
 
-    local status_filter=""
-    for arg in "$@"; do
-        case "$arg" in
-            --status=*) status_filter="${arg#--status=}" ;;
+    local status_filter="" assignee_filter=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --status=*) status_filter="${1#--status=}"; shift ;;
+            -a) assignee_filter="$2"; shift 2 ;;
+            --assignee=*) assignee_filter="${1#--assignee=}"; shift ;;
+            *) shift ;;
         esac
     done
 
-    awk -v status_filter="$status_filter" '
+    awk -v status_filter="$status_filter" -v assignee_filter="$assignee_filter" '
     BEGIN { FS=": "; in_front=0 }
     FNR==1 {
         if (prev_file) emit()
-        id=""; status=""; title=""; deps=""; in_front=0
+        id=""; status=""; title=""; deps=""; assignee=""; in_front=0
         prev_file=FILENAME
     }
     /^---$/ { in_front = !in_front; next }
     in_front && /^id:/ { id = $2 }
     in_front && /^status:/ { status = $2 }
+    in_front && /^assignee:/ { assignee = $2 }
     in_front && /^deps:/ {
         deps = $2
         gsub(/[\[\] ]/, "", deps)
@@ -501,7 +505,7 @@ cmd_ls() {
     !in_front && /^# / && title == "" { title = substr($0, 3) }
     END { if (prev_file) emit() }
     function emit() {
-        if (id != "" && (status_filter == "" || status == status_filter)) {
+        if (id != "" && (status_filter == "" || status == status_filter) && (assignee_filter == "" || assignee == assignee_filter)) {
             deps_display = (deps != "") ? "[" deps "]" : "[]"
             gsub(/,/, ", ", deps_display)
             dep_str = (deps_display != "[]") ? " <- " deps_display : ""
@@ -514,17 +518,27 @@ cmd_ls() {
 cmd_ready() {
     [[ ! -d "$TICKETS_DIR" ]] && return 0
 
-    awk '
+    local assignee_filter=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -a) assignee_filter="$2"; shift 2 ;;
+            --assignee=*) assignee_filter="${1#--assignee=}"; shift ;;
+            *) shift ;;
+        esac
+    done
+
+    awk -v assignee_filter="$assignee_filter" '
     BEGIN { FS=": "; in_front=0 }
     FNR==1 {
         if (prev_file) store()
-        id=""; status=""; title=""; deps=""; priority=""; in_front=0
+        id=""; status=""; title=""; deps=""; priority=""; assignee=""; in_front=0
         prev_file=FILENAME
     }
     /^---$/ { in_front = !in_front; next }
     in_front && /^id:/ { id = $2 }
     in_front && /^status:/ { status = $2 }
     in_front && /^priority:/ { priority = $2 }
+    in_front && /^assignee:/ { assignee = $2 }
     in_front && /^deps:/ {
         deps = $2
         gsub(/[\[\] ]/, "", deps)
@@ -536,6 +550,7 @@ cmd_ready() {
             titles[id] = title
             deps_raw[id] = deps
             priorities[id] = (priority != "") ? priority : 2
+            assignees[id] = assignee
         }
     }
     END {
@@ -544,6 +559,7 @@ cmd_ready() {
         for (id in statuses) {
             status = statuses[id]
             if (status != "open" && status != "in_progress") continue
+            if (assignee_filter != "" && assignees[id] != assignee_filter) continue
 
             deps = deps_raw[id]
             ready = 1
@@ -584,10 +600,13 @@ cmd_ready() {
 cmd_closed() {
     [[ ! -d "$TICKETS_DIR" ]] && return 0
 
-    local limit=20
-    for arg in "$@"; do
-        case "$arg" in
-            --limit=*) limit="${arg#--limit=}" ;;
+    local limit=20 assignee_filter=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --limit=*) limit="${1#--limit=}"; shift ;;
+            -a) assignee_filter="$2"; shift 2 ;;
+            --assignee=*) assignee_filter="${1#--assignee=}"; shift ;;
+            *) shift ;;
         esac
     done
 
@@ -595,19 +614,20 @@ cmd_closed() {
     local files
     files=$(ls -t "$TICKETS_DIR"/*.md 2>/dev/null | head -n 100)
     [[ -z "$files" ]] && return 0
-    echo "$files" | xargs awk '
+    echo "$files" | xargs awk -v assignee_filter="$assignee_filter" '
     BEGIN { FS=": "; in_front=0 }
     FNR==1 {
         if (prev_file) emit()
-        id=""; status=""; title=""; in_front=0
+        id=""; status=""; title=""; assignee=""; in_front=0
         prev_file=FILENAME
     }
     /^---$/ { in_front = !in_front; next }
     in_front && /^id:/ { id = $2 }
     in_front && /^status:/ { status = $2 }
+    in_front && /^assignee:/ { assignee = $2 }
     !in_front && /^# / && title == "" { title = substr($0, 3) }
     function emit() {
-        if (id != "" && (status == "closed" || status == "done")) {
+        if (id != "" && (status == "closed" || status == "done") && (assignee_filter == "" || assignee == assignee_filter)) {
             output[++count] = sprintf("%-8s [%s] - %s", id, status, title)
         }
     }
@@ -621,17 +641,27 @@ cmd_closed() {
 cmd_blocked() {
     [[ ! -d "$TICKETS_DIR" ]] && return 0
 
-    awk '
+    local assignee_filter=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -a) assignee_filter="$2"; shift 2 ;;
+            --assignee=*) assignee_filter="${1#--assignee=}"; shift ;;
+            *) shift ;;
+        esac
+    done
+
+    awk -v assignee_filter="$assignee_filter" '
     BEGIN { FS=": "; in_front=0 }
     FNR==1 {
         if (prev_file) store()
-        id=""; status=""; title=""; deps=""; priority=""; in_front=0
+        id=""; status=""; title=""; deps=""; priority=""; assignee=""; in_front=0
         prev_file=FILENAME
     }
     /^---$/ { in_front = !in_front; next }
     in_front && /^id:/ { id = $2 }
     in_front && /^status:/ { status = $2 }
     in_front && /^priority:/ { priority = $2 }
+    in_front && /^assignee:/ { assignee = $2 }
     in_front && /^deps:/ {
         deps = $2
         gsub(/[\[\] ]/, "", deps)
@@ -643,6 +673,7 @@ cmd_blocked() {
             titles[id] = title
             deps_raw[id] = deps
             priorities[id] = (priority != "") ? priority : 2
+            assignees[id] = assignee
         }
     }
     END {
@@ -651,6 +682,7 @@ cmd_blocked() {
         for (id in statuses) {
             status = statuses[id]
             if (status != "open" && status != "in_progress") continue
+            if (assignee_filter != "" && assignees[id] != assignee_filter) continue
 
             deps = deps_raw[id]
             if (deps == "") continue
@@ -1208,10 +1240,10 @@ Commands:
   undep <id> <dep-id>      Remove dependency
   link <id> <id> [id...]   Link tickets together (symmetric)
   unlink <id> <target-id>  Remove link between tickets
-  ls [--status=X]          List tickets
-  ready                    List open/in-progress tickets with deps resolved
-  blocked                  List open/in-progress tickets with unresolved deps
-  closed [--limit=N]       List recently closed tickets (default 20, by mtime)
+  ls [--status=X] [-a X]   List tickets
+  ready [-a X]             List open/in-progress tickets with deps resolved
+  blocked [-a X]           List open/in-progress tickets with unresolved deps
+  closed [--limit=N] [-a X] List recently closed tickets (default 20, by mtime)
   show <id>                Display ticket
   edit <id>                Open ticket in \$EDITOR
   add-note <id> [text]     Append timestamped note (or pipe via stdin)
@@ -1235,8 +1267,8 @@ case "${1:-help}" in
     link)   shift; cmd_link "$@" ;;
     unlink) shift; cmd_unlink "$@" ;;
     ls)     shift; cmd_ls "$@" ;;
-    ready)  cmd_ready ;;
-    blocked) cmd_blocked ;;
+    ready)  shift; cmd_ready "$@" ;;
+    blocked) shift; cmd_blocked "$@" ;;
     closed) shift; cmd_closed "$@" ;;
     show)   shift; cmd_show "$@" ;;
     edit)   shift; cmd_edit "$@" ;;

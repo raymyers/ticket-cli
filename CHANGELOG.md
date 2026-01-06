@@ -4,6 +4,7 @@
 
 ### Added
 - `add-note` command for appending timestamped notes to tickets
+- `-a, --assignee` filter flag for `ls`, `ready`, `blocked`, and `closed` commands
 
 ## [0.2.0] - 2026-01-04
 
