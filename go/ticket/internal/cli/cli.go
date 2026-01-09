@@ -56,6 +56,8 @@ func Run(args []string) int {
 		return cmdClosed(commandArgs)
 	case "dep":
 		return cmdDep(commandArgs)
+	case "undep":
+		return cmdUndep(commandArgs)
 	case "link":
 		return cmdLink(commandArgs)
 	default:
@@ -1315,8 +1317,14 @@ func cmdClosed(args []string) int {
 }
 
 func cmdDep(args []string) int {
+	// Handle subcommands
+	if len(args) > 0 && args[0] == "tree" {
+		return cmdDepTree(args[1:])
+	}
+
 	if len(args) < 2 {
 		fmt.Fprintln(os.Stderr, "Usage: ticket dep <id> <dependency-id>")
+		fmt.Fprintln(os.Stderr, "       ticket dep tree [--full] <id>  - show dependency tree")
 		return 1
 	}
 
@@ -1367,6 +1375,197 @@ func cmdDep(args []string) int {
 	}
 
 	fmt.Printf("Added dependency: %s -> %s\n", actualID, actualDepID)
+	return 0
+}
+
+func cmdUndep(args []string) int {
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "Usage: ticket undep <id> <dependency-id>")
+		return 1
+	}
+
+	ticketID := args[0]
+	depID := args[1]
+
+	// Resolve both ticket IDs
+	filePath, err := resolveTicketID(ticketID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+
+	depPath, err := resolveTicketID(depID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+
+	// Get actual IDs from file stems
+	actualID := strings.TrimSuffix(filepath.Base(filePath), ".md")
+	actualDepID := strings.TrimSuffix(filepath.Base(depPath), ".md")
+
+	// Get current deps
+	ticket, err := parseTicketFull(filePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading ticket: %v\n", err)
+		return 1
+	}
+
+	existingDeps := parseListField(ticket.Frontmatter["deps"])
+
+	// Check if dependency exists
+	found := false
+	var newDeps []string
+	for _, dep := range existingDeps {
+		if dep != actualDepID {
+			newDeps = append(newDeps, dep)
+		} else {
+			found = true
+		}
+	}
+
+	if !found {
+		fmt.Println("Dependency not found")
+		return 1
+	}
+
+	// Update deps
+	newDepsStr := "[" + strings.Join(newDeps, ", ") + "]"
+	if err := updateYAMLField(filePath, "deps", newDepsStr); err != nil {
+		fmt.Fprintf(os.Stderr, "Error updating ticket: %v\n", err)
+		return 1
+	}
+
+	fmt.Printf("Removed dependency: %s -/-> %s\n", actualID, actualDepID)
+	return 0
+}
+
+func cmdDepTree(args []string) int {
+	fullMode := false
+	var rootID string
+
+	// Parse arguments
+	for _, arg := range args {
+		if arg == "--full" {
+			fullMode = true
+		} else {
+			rootID = arg
+		}
+	}
+
+	if rootID == "" {
+		fmt.Fprintln(os.Stderr, "Usage: ticket dep tree [--full] <id>")
+		return 1
+	}
+
+	// Load all tickets
+	allTickets, err := loadAllTickets()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading tickets: %v\n", err)
+		return 1
+	}
+
+	if len(allTickets) == 0 {
+		fmt.Fprintf(os.Stderr, "Error: ticket %s not found\n", rootID)
+		return 1
+	}
+
+	// Resolve partial ID
+	var root string
+	for ticketID := range allTickets {
+		if strings.Contains(ticketID, rootID) {
+			if root != "" {
+				fmt.Fprintf(os.Stderr, "Error: ambiguous ID %s\n", rootID)
+				return 1
+			}
+			root = ticketID
+		}
+	}
+
+	if root == "" {
+		fmt.Fprintf(os.Stderr, "Error: ticket %s not found\n", rootID)
+		return 1
+	}
+
+	// Build dependency info for all tickets
+	depsMap := make(map[string][]string)
+	for ticketID, ticket := range allTickets {
+		deps := parseListField(ticket.Frontmatter["deps"])
+		depsMap[ticketID] = deps
+	}
+
+	// Print tree recursively
+	printed := make(map[string]bool)
+
+	var printTree func(ticketID, prefix string, isLast bool, path map[string]bool)
+	printTree = func(ticketID, prefix string, isLast bool, path map[string]bool) {
+		// Handle cycles
+		if path[ticketID] {
+			return
+		}
+
+		// Skip if already printed in non-full mode
+		if !fullMode && printed[ticketID] {
+			return
+		}
+
+		// Get ticket info
+		ticket, ok := allTickets[ticketID]
+		if !ok {
+			return
+		}
+
+		status := "open"
+		if s, ok := ticket.Frontmatter["status"].(string); ok {
+			status = s
+		}
+		title := ticket.Title
+
+		// Print current ticket
+		if ticketID == root {
+			fmt.Printf("%s [%s] %s\n", ticketID, status, title)
+		} else {
+			connector := "└── "
+			if !isLast {
+				connector = "├── "
+			}
+			fmt.Printf("%s%s%s [%s] %s\n", prefix, connector, ticketID, status, title)
+		}
+
+		printed[ticketID] = true
+
+		// Get dependencies
+		deps := depsMap[ticketID]
+
+		if len(deps) > 0 {
+			// Update path for cycle detection
+			newPath := make(map[string]bool)
+			for k, v := range path {
+				newPath[k] = v
+			}
+			newPath[ticketID] = true
+
+			// Update prefix for children
+			var newPrefix string
+			if ticketID == root {
+				newPrefix = ""
+			} else {
+				if isLast {
+					newPrefix = prefix + "    "
+				} else {
+					newPrefix = prefix + "│   "
+				}
+			}
+
+			// Print each dependency
+			for i, depID := range deps {
+				isLastDep := (i == len(deps)-1)
+				printTree(depID, newPrefix, isLastDep, newPath)
+			}
+		}
+	}
+
+	printTree(root, "", true, make(map[string]bool))
 	return 0
 }
 
