@@ -707,11 +707,125 @@ fn handleLink(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
 }
 
 fn handleUnlink(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
-    _ = allocator;
-    _ = args;
-    const stdout = stdout_file;
-    try stdout.writeAll("Error: unlink command not yet implemented\n");
-    return 1;
+    if (args.len != 2) {
+        try stderr_file.writeAll("Usage: ticket unlink <id> <target-id>\n");
+        return 1;
+    }
+
+    const ticket_id = args[0];
+    const target_id = args[1];
+
+    // Resolve both ticket IDs
+    const file_path = resolveTicketID(allocator, ticket_id) catch |err| {
+        var buf: [512]u8 = undefined;
+        const msg = if (err == error.NotFound)
+            try std.fmt.bufPrint(&buf, "Error: ticket '{s}' not found\n", .{ticket_id})
+        else if (err == error.Ambiguous)
+            try std.fmt.bufPrint(&buf, "Error: ambiguous ID '{s}' matches multiple tickets\n", .{ticket_id})
+        else
+            try std.fmt.bufPrint(&buf, "Error resolving ticket ID\n", .{});
+        try stderr_file.writeAll(msg);
+        return 1;
+    };
+    defer allocator.free(file_path);
+
+    const target_path = resolveTicketID(allocator, target_id) catch |err| {
+        var buf: [512]u8 = undefined;
+        const msg = if (err == error.NotFound)
+            try std.fmt.bufPrint(&buf, "Error: ticket '{s}' not found\n", .{target_id})
+        else if (err == error.Ambiguous)
+            try std.fmt.bufPrint(&buf, "Error: ambiguous ID '{s}' matches multiple tickets\n", .{target_id})
+        else
+            try std.fmt.bufPrint(&buf, "Error resolving ticket ID\n", .{});
+        try stderr_file.writeAll(msg);
+        return 1;
+    };
+    defer allocator.free(target_path);
+
+    // Get actual IDs from file paths
+    const actual_id = try getTicketIDFromPath(allocator, file_path);
+    defer allocator.free(actual_id);
+    
+    const actual_target_id = try getTicketIDFromPath(allocator, target_path);
+    defer allocator.free(actual_target_id);
+
+    // Check if link exists in first ticket
+    const content = try std.fs.cwd().readFileAlloc(allocator, file_path, 1024 * 1024);
+    defer allocator.free(content);
+
+    const existing_links = try parseListField(allocator, content, "links");
+    defer {
+        for (existing_links) |link| {
+            allocator.free(link);
+        }
+        allocator.free(existing_links);
+    }
+
+    // Check if target is in the links
+    var link_exists = false;
+    for (existing_links) |link| {
+        if (std.mem.eql(u8, link, actual_target_id)) {
+            link_exists = true;
+            break;
+        }
+    }
+
+    if (!link_exists) {
+        try stdout_file.writeAll("Link not found\n");
+        return 1;
+    }
+
+    // Remove link from first ticket
+    var new_links: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (new_links.items) |link| {
+            allocator.free(link);
+        }
+        new_links.deinit(allocator);
+    }
+
+    for (existing_links) |link| {
+        if (!std.mem.eql(u8, link, actual_target_id)) {
+            try new_links.append(allocator, try allocator.dupe(u8, link));
+        }
+    }
+
+    try updateYAMLField(allocator, file_path, "links", new_links.items);
+
+    // Remove link from second ticket
+    const target_content = try std.fs.cwd().readFileAlloc(allocator, target_path, 1024 * 1024);
+    defer allocator.free(target_content);
+
+    const target_links = try parseListField(allocator, target_content, "links");
+    defer {
+        for (target_links) |link| {
+            allocator.free(link);
+        }
+        allocator.free(target_links);
+    }
+
+    var new_target_links: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (new_target_links.items) |link| {
+            allocator.free(link);
+        }
+        new_target_links.deinit(allocator);
+    }
+
+    for (target_links) |link| {
+        if (!std.mem.eql(u8, link, actual_id)) {
+            try new_target_links.append(allocator, try allocator.dupe(u8, link));
+        }
+    }
+
+    try updateYAMLField(allocator, target_path, "links", new_target_links.items);
+
+    // Print success message
+    var buf: [512]u8 = undefined;
+    const msg = try std.fmt.bufPrint(&buf, "Removed link: {s} <-> {s}\n", .{ actual_id, actual_target_id });
+    try stdout_file.writeAll(msg);
+
+    return 0;
 }
 
 fn handleEdit(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
