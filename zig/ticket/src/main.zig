@@ -101,7 +101,7 @@ fn printUsage() void {
 
 fn handleCreate(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
     try ensureTicketsDir();
-    
+
     var title: ?[]const u8 = null;
     var description: ?[]const u8 = null;
     var design: ?[]const u8 = null;
@@ -111,15 +111,15 @@ fn handleCreate(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
     var assignee: ?[]u8 = null;
     var external_ref: ?[]const u8 = null;
     var parent: ?[]const u8 = null;
-    
+
     // Try to get git user.name as default assignee
     assignee = try getGitUserName(allocator);
-    
+
     // Parse command line arguments
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         const arg = args[i];
-        
+
         if (std.mem.eql(u8, arg, "-d") or std.mem.eql(u8, arg, "--description")) {
             if (i + 1 >= args.len) {
                 try stderr_file.writeAll("Error: -d/--description requires an argument\n");
@@ -188,24 +188,24 @@ fn handleCreate(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
             title = arg;
         }
     }
-    
+
     defer if (assignee) |a| allocator.free(a);
-    
+
     const final_title = title orelse "Untitled";
     const ticket_id = try generateTicketID(allocator);
     defer allocator.free(ticket_id);
-    
+
     const timestamp = try getCurrentTimestamp(allocator);
     defer allocator.free(timestamp);
-    
+
     // Build file path
     var file_path_buf: [256]u8 = undefined;
     const file_path = try std.fmt.bufPrint(&file_path_buf, "{s}/{s}.md", .{ tickets_dir, ticket_id });
-    
+
     // Build content
     var content: std.ArrayList(u8) = .empty;
     defer content.deinit(allocator);
-    
+
     try content.appendSlice(allocator, "---\n");
     try content.appendSlice(allocator, "id: ");
     try content.appendSlice(allocator, ticket_id);
@@ -217,64 +217,64 @@ fn handleCreate(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
     try content.appendSlice(allocator, "\ntype: ");
     try content.appendSlice(allocator, issue_type);
     try content.appendSlice(allocator, "\npriority: ");
-    
+
     var priority_buf: [16]u8 = undefined;
     const priority_str = try std.fmt.bufPrint(&priority_buf, "{d}", .{priority});
     try content.appendSlice(allocator, priority_str);
     try content.appendSlice(allocator, "\n");
-    
+
     if (assignee) |a| {
         try content.appendSlice(allocator, "assignee: ");
         try content.appendSlice(allocator, a);
         try content.appendSlice(allocator, "\n");
     }
-    
+
     if (external_ref) |ref| {
         try content.appendSlice(allocator, "external-ref: ");
         try content.appendSlice(allocator, ref);
         try content.appendSlice(allocator, "\n");
     }
-    
+
     if (parent) |p| {
         try content.appendSlice(allocator, "parent: ");
         try content.appendSlice(allocator, p);
         try content.appendSlice(allocator, "\n");
     }
-    
+
     try content.appendSlice(allocator, "---\n# ");
     try content.appendSlice(allocator, final_title);
     try content.appendSlice(allocator, "\n\n");
-    
+
     if (description) |desc| {
         try content.appendSlice(allocator, desc);
         try content.appendSlice(allocator, "\n\n");
     }
-    
+
     if (design) |des| {
         try content.appendSlice(allocator, "## Design\n\n");
         try content.appendSlice(allocator, des);
         try content.appendSlice(allocator, "\n\n");
     }
-    
+
     if (acceptance) |acc| {
         try content.appendSlice(allocator, "## Acceptance Criteria\n\n");
         try content.appendSlice(allocator, acc);
         try content.appendSlice(allocator, "\n\n");
     }
-    
+
     // Write file
     try std.fs.cwd().writeFile(.{ .sub_path = file_path, .data = content.items });
-    
+
     // Output ticket ID
     try stdout_file.writeAll(ticket_id);
     try stdout_file.writeAll("\n");
-    
+
     return 0;
 }
 
 fn handleStatus(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
     const valid_statuses = [_][]const u8{ "open", "in_progress", "closed" };
-    
+
     if (args.len < 2) {
         try stderr_file.writeAll("Usage: ticket status <id> <status>\n");
         return 1;
@@ -291,7 +291,7 @@ fn handleStatus(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
             break;
         }
     }
-    
+
     if (!is_valid) {
         var buf: [512]u8 = undefined;
         const msg = try std.fmt.bufPrint(&buf, "Error: invalid status '{s}'. Must be one of: open in_progress closed\n", .{new_status});
@@ -336,12 +336,12 @@ fn handleStart(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
         try stderr_file.writeAll("Usage: ticket start <id>\n");
         return 1;
     }
-    
+
     // Create a new args array with the status value added
     var new_args: [2][:0]const u8 = undefined;
     new_args[0] = args[0];
     new_args[1] = "in_progress";
-    
+
     return try handleStatus(allocator, &new_args);
 }
 
@@ -350,12 +350,12 @@ fn handleClose(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
         try stderr_file.writeAll("Usage: ticket close <id>\n");
         return 1;
     }
-    
+
     // Create a new args array with the status value added
     var new_args: [2][:0]const u8 = undefined;
     new_args[0] = args[0];
     new_args[1] = "closed";
-    
+
     return try handleStatus(allocator, &new_args);
 }
 
@@ -364,12 +364,12 @@ fn handleReopen(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
         try stderr_file.writeAll("Usage: ticket reopen <id>\n");
         return 1;
     }
-    
+
     // Create a new args array with the status value added
     var new_args: [2][:0]const u8 = undefined;
     new_args[0] = args[0];
     new_args[1] = "open";
-    
+
     return try handleStatus(allocator, &new_args);
 }
 
@@ -632,7 +632,7 @@ fn handleList(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
 
 fn handleReady(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
     _ = args;
-    
+
     // Check if tickets directory exists
     var dir = std.fs.cwd().openDir(tickets_dir, .{}) catch {
         return 0;
@@ -664,7 +664,7 @@ fn handleReady(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
     var iter = tickets.iterator();
     while (iter.next()) |entry| {
         const ticket = entry.value_ptr.*;
-        
+
         // Only consider open or in_progress tickets
         if (!std.mem.eql(u8, ticket.status, "open") and !std.mem.eql(u8, ticket.status, "in_progress")) {
             continue;
@@ -717,7 +717,7 @@ fn handleReady(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
 
 fn handleBlocked(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
     _ = args;
-    
+
     // Check if tickets directory exists
     var dir = std.fs.cwd().openDir(tickets_dir, .{}) catch {
         return 0;
@@ -755,7 +755,7 @@ fn handleBlocked(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
     var iter = tickets.iterator();
     while (iter.next()) |entry| {
         const ticket = entry.value_ptr.*;
-        
+
         // Only consider open or in_progress tickets
         if (!std.mem.eql(u8, ticket.status, "open") and !std.mem.eql(u8, ticket.status, "in_progress")) {
             continue;
@@ -1219,7 +1219,7 @@ fn handleUnlink(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
     // Get actual IDs from file paths
     const actual_id = try getTicketIDFromPath(allocator, file_path);
     defer allocator.free(actual_id);
-    
+
     const actual_target_id = try getTicketIDFromPath(allocator, target_path);
     defer allocator.free(actual_target_id);
 
@@ -1332,12 +1332,12 @@ fn handleEdit(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
     if (is_tty) {
         // Open in editor
         const editor = std.posix.getenv("EDITOR") orelse "vi";
-        
+
         var child = std.process.Child.init(&[_][]const u8{ editor, file_path }, allocator);
         child.stdin_behavior = .Inherit;
         child.stdout_behavior = .Inherit;
         child.stderr_behavior = .Inherit;
-        
+
         _ = try child.spawnAndWait();
     } else {
         // Non-TTY mode: just print the file path
@@ -1356,12 +1356,12 @@ fn handleAddNote(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
     }
 
     const ticket_id = args[0];
-    
+
     // Get note text from remaining args
     const note_text = if (args.len > 1) blk: {
         var result: std.ArrayList(u8) = .empty;
         defer result.deinit(allocator);
-        
+
         for (args[1..], 0..) |arg, i| {
             if (i > 0) try result.append(allocator, ' ');
             try result.appendSlice(allocator, arg);
@@ -1407,7 +1407,7 @@ fn handleAddNote(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
 
     // Check if Notes section exists
     const has_notes = std.mem.indexOf(u8, content, "## Notes") != null;
-    
+
     if (has_notes) {
         // Append to existing content
         try result.appendSlice(allocator, content);
@@ -1439,7 +1439,7 @@ fn handleAddNote(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
 
 fn handleQuery(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
     const jq_filter = if (args.len > 0) args[0] else null;
-    
+
     // Check if tickets directory exists
     var dir = std.fs.cwd().openDir(tickets_dir, .{ .iterate = true }) catch |err| {
         if (err == error.FileNotFound) {
@@ -1448,7 +1448,7 @@ fn handleQuery(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
         return err;
     };
     defer dir.close();
-    
+
     // Collect all JSONL output
     var jsonl_lines: std.ArrayList([]u8) = .empty;
     defer {
@@ -1457,58 +1457,58 @@ fn handleQuery(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
         }
         jsonl_lines.deinit(allocator);
     }
-    
+
     // Iterate through all .md files
     var iter = dir.iterate();
     while (try iter.next()) |entry| {
         if (entry.kind != .file) continue;
         if (!std.mem.endsWith(u8, entry.name, ".md")) continue;
-        
+
         const file_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ tickets_dir, entry.name });
         defer allocator.free(file_path);
-        
+
         // Parse ticket frontmatter
         const json_line = try ticketToJson(allocator, file_path);
         try jsonl_lines.append(allocator, json_line);
     }
-    
+
     // If jq filter is provided, pipe through jq
     if (jq_filter) |filter| {
         // Build input for jq
         var input: std.ArrayList(u8) = .empty;
         defer input.deinit(allocator);
-        
+
         for (jsonl_lines.items) |line| {
             try input.appendSlice(allocator, line);
             try input.append(allocator, '\n');
         }
-        
+
         // Run jq command
         const jq_args = [_][]const u8{ "jq", "-c", try std.fmt.allocPrint(allocator, "select({s})", .{filter}) };
         defer allocator.free(jq_args[2]);
-        
+
         var child = std.process.Child.init(&jq_args, allocator);
         child.stdin_behavior = .Pipe;
         child.stdout_behavior = .Pipe;
         child.stderr_behavior = .Inherit;
-        
+
         try child.spawn();
-        
+
         // Write input to jq
         try child.stdin.?.writeAll(input.items);
         child.stdin.?.close();
         child.stdin = null;
-        
+
         // Read output from jq
         const output = try child.stdout.?.readToEndAlloc(allocator, 10 * 1024 * 1024);
         defer allocator.free(output);
-        
+
         const term = try child.wait();
-        
+
         if (term != .Exited or term.Exited != 0) {
             return 1;
         }
-        
+
         try stdout_file.writeAll(output);
     } else {
         // Output all JSONL lines
@@ -1517,7 +1517,7 @@ fn handleQuery(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
             try stdout_file.writeAll("\n");
         }
     }
-    
+
     return 0;
 }
 
@@ -1525,7 +1525,7 @@ fn handleQuery(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
 fn ticketToJson(allocator: std.mem.Allocator, file_path: []const u8) ![]u8 {
     const content = try std.fs.cwd().readFileAlloc(allocator, file_path, 1024 * 1024);
     defer allocator.free(content);
-    
+
     // Parse frontmatter
     var frontmatter = std.StringHashMap([]const u8).init(allocator);
     defer {
@@ -1536,14 +1536,14 @@ fn ticketToJson(allocator: std.mem.Allocator, file_path: []const u8) ![]u8 {
         }
         frontmatter.deinit();
     }
-    
+
     var lines = std.mem.splitScalar(u8, content, '\n');
     var in_frontmatter = false;
     var frontmatter_count: u8 = 0;
-    
+
     while (lines.next()) |line| {
         const trimmed = std.mem.trim(u8, line, " \t\r");
-        
+
         if (std.mem.eql(u8, trimmed, "---")) {
             frontmatter_count += 1;
             if (frontmatter_count == 1) {
@@ -1553,7 +1553,7 @@ fn ticketToJson(allocator: std.mem.Allocator, file_path: []const u8) ![]u8 {
             }
             continue;
         }
-        
+
         if (in_frontmatter) {
             if (std.mem.indexOfScalar(u8, trimmed, ':')) |colon_idx| {
                 const key = std.mem.trim(u8, trimmed[0..colon_idx], " \t");
@@ -1562,13 +1562,13 @@ fn ticketToJson(allocator: std.mem.Allocator, file_path: []const u8) ![]u8 {
             }
         }
     }
-    
+
     // Build JSON object
     var json: std.ArrayList(u8) = .empty;
     errdefer json.deinit(allocator);
-    
+
     try json.append(allocator, '{');
-    
+
     var first = true;
     var iter = frontmatter.iterator();
     while (iter.next()) |entry| {
@@ -1576,15 +1576,15 @@ fn ticketToJson(allocator: std.mem.Allocator, file_path: []const u8) ![]u8 {
             try json.append(allocator, ',');
         }
         first = false;
-        
+
         const key = entry.key_ptr.*;
         const value = entry.value_ptr.*;
-        
+
         // Write key
         try json.append(allocator, '"');
         try jsonEscape(allocator, &json, key);
         try json.appendSlice(allocator, "\":");
-        
+
         // Handle array fields (deps, links)
         if (std.mem.eql(u8, key, "deps") or std.mem.eql(u8, key, "links")) {
             try formatJsonArray(allocator, &json, value);
@@ -1599,27 +1599,27 @@ fn ticketToJson(allocator: std.mem.Allocator, file_path: []const u8) ![]u8 {
             try json.append(allocator, '"');
         }
     }
-    
+
     try json.append(allocator, '}');
-    
+
     return json.toOwnedSlice(allocator);
 }
 
 // Format a YAML array as JSON array
 fn formatJsonArray(allocator: std.mem.Allocator, json: *std.ArrayList(u8), value: []const u8) !void {
     try json.append(allocator, '[');
-    
+
     // Handle empty array
     if (std.mem.eql(u8, value, "[]")) {
         try json.append(allocator, ']');
         return;
     }
-    
+
     // Parse array from [a, b, c] format
     if (std.mem.startsWith(u8, value, "[") and std.mem.endsWith(u8, value, "]")) {
         const inner = value[1 .. value.len - 1];
         const inner_trimmed = std.mem.trim(u8, inner, " \t");
-        
+
         if (inner_trimmed.len > 0) {
             var items = std.mem.splitScalar(u8, inner_trimmed, ',');
             var first = true;
@@ -1637,7 +1637,7 @@ fn formatJsonArray(allocator: std.mem.Allocator, json: *std.ArrayList(u8), value
             }
         }
     }
-    
+
     try json.append(allocator, ']');
 }
 
@@ -1656,107 +1656,284 @@ fn jsonEscape(allocator: std.mem.Allocator, json: *std.ArrayList(u8), s: []const
 }
 
 fn handleMigrateBeads(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
-    _ = allocator;
     _ = args;
-    const stdout = stdout_file;
-    try stdout.writeAll("Error: migrate-beads command not yet implemented\n");
-    return 1;
+
+    const jsonl_path = ".beads/issues.jsonl";
+
+    // Check if file exists
+    const file = std.fs.cwd().openFile(jsonl_path, .{}) catch {
+        try stderr_file.writeAll("Error: .beads/issues.jsonl not found\n");
+        return 1;
+    };
+    defer file.close();
+
+    try ensureTicketsDir();
+
+    // Read entire file
+    const max_size = 100 * 1024 * 1024; // 100MB max
+    const file_content = try file.readToEndAlloc(allocator, max_size);
+    defer allocator.free(file_content);
+
+    var count: usize = 0;
+    var lines = std.mem.splitScalar(u8, file_content, '\n');
+
+    while (lines.next()) |line| {
+        if (line.len == 0) continue;
+
+        // Parse JSON line
+        const parsed = std.json.parseFromSlice(
+            std.json.Value,
+            allocator,
+            line,
+            .{},
+        ) catch |err| {
+            var buf: [256]u8 = undefined;
+            const msg = try std.fmt.bufPrint(&buf, "Warning: failed to parse line: {}\n", .{err});
+            try stderr_file.writeAll(msg);
+            continue;
+        };
+        defer parsed.deinit();
+
+        const obj = parsed.value.object;
+
+        // Extract fields
+        const id = if (obj.get("id")) |v| v.string else continue;
+        const status = if (obj.get("status")) |v| v.string else "open";
+        const title = if (obj.get("title")) |v| v.string else "Untitled";
+        const issue_type = if (obj.get("issue_type")) |v| v.string else "task";
+        const priority = if (obj.get("priority")) |v| switch (v) {
+            .integer => |i| i,
+            .float => |f| @as(i64, @intFromFloat(f)),
+            else => 2,
+        } else 2;
+        const created_at = if (obj.get("created_at")) |v| v.string else "";
+
+        // Optional fields
+        const description = if (obj.get("description")) |v| if (v == .string) v.string else null else null;
+        const design = if (obj.get("design")) |v| if (v == .string) v.string else null else null;
+        const acceptance_criteria = if (obj.get("acceptance_criteria")) |v| if (v == .string) v.string else null else null;
+        const notes = if (obj.get("notes")) |v| if (v == .string) v.string else null else null;
+        const assignee = if (obj.get("assignee")) |v| if (v == .string and v.string.len > 0) v.string else null else null;
+        const external_ref = if (obj.get("external_ref")) |v| if (v == .string and v.string.len > 0) v.string else null else null;
+
+        // Parse dependencies - map by type
+        var deps_list: std.ArrayList([]const u8) = .empty;
+        defer deps_list.deinit(allocator);
+        var links_list: std.ArrayList([]const u8) = .empty;
+        defer links_list.deinit(allocator);
+        var parent: ?[]const u8 = null;
+
+        if (obj.get("dependencies")) |deps_value| {
+            if (deps_value == .array) {
+                for (deps_value.array.items) |dep_item| {
+                    if (dep_item != .object) continue;
+                    const dep_obj = dep_item.object;
+
+                    const dep_type = if (dep_obj.get("type")) |v| v.string else continue;
+                    const depends_on_id = if (dep_obj.get("depends_on_id")) |v| v.string else continue;
+
+                    if (std.mem.eql(u8, dep_type, "blocks")) {
+                        try deps_list.append(allocator, depends_on_id);
+                    } else if (std.mem.eql(u8, dep_type, "parent-child")) {
+                        if (parent == null) {
+                            parent = depends_on_id;
+                        }
+                    } else if (std.mem.eql(u8, dep_type, "related")) {
+                        try links_list.append(allocator, depends_on_id);
+                    }
+                }
+            }
+        }
+
+        // Build file path
+        var file_path_buf: [256]u8 = undefined;
+        const file_path = try std.fmt.bufPrint(&file_path_buf, "{s}/{s}.md", .{ tickets_dir, id });
+
+        // Build content
+        var content: std.ArrayList(u8) = .empty;
+        defer content.deinit(allocator);
+
+        try content.appendSlice(allocator, "---\n");
+        try content.appendSlice(allocator, "id: ");
+        try content.appendSlice(allocator, id);
+        try content.appendSlice(allocator, "\nstatus: ");
+        try content.appendSlice(allocator, status);
+        try content.appendSlice(allocator, "\ndeps: [");
+
+        for (deps_list.items, 0..) |dep, i| {
+            if (i > 0) try content.appendSlice(allocator, ", ");
+            try content.appendSlice(allocator, dep);
+        }
+
+        try content.appendSlice(allocator, "]\nlinks: [");
+
+        for (links_list.items, 0..) |link, i| {
+            if (i > 0) try content.appendSlice(allocator, ", ");
+            try content.appendSlice(allocator, link);
+        }
+
+        try content.appendSlice(allocator, "]\ncreated: ");
+        try content.appendSlice(allocator, created_at);
+        try content.appendSlice(allocator, "\ntype: ");
+        try content.appendSlice(allocator, issue_type);
+        try content.appendSlice(allocator, "\npriority: ");
+
+        var priority_buf: [16]u8 = undefined;
+        const priority_str = try std.fmt.bufPrint(&priority_buf, "{d}", .{priority});
+        try content.appendSlice(allocator, priority_str);
+        try content.appendSlice(allocator, "\n");
+
+        if (assignee) |a| {
+            try content.appendSlice(allocator, "assignee: ");
+            try content.appendSlice(allocator, a);
+            try content.appendSlice(allocator, "\n");
+        }
+
+        if (external_ref) |ref| {
+            try content.appendSlice(allocator, "external-ref: ");
+            try content.appendSlice(allocator, ref);
+            try content.appendSlice(allocator, "\n");
+        }
+
+        if (parent) |p| {
+            try content.appendSlice(allocator, "parent: ");
+            try content.appendSlice(allocator, p);
+            try content.appendSlice(allocator, "\n");
+        }
+
+        try content.appendSlice(allocator, "---\n# ");
+        try content.appendSlice(allocator, title);
+        try content.appendSlice(allocator, "\n\n");
+
+        if (description) |desc| {
+            try content.appendSlice(allocator, desc);
+            try content.appendSlice(allocator, "\n\n");
+        }
+
+        if (design) |des| {
+            try content.appendSlice(allocator, "## Design\n\n");
+            try content.appendSlice(allocator, des);
+            try content.appendSlice(allocator, "\n\n");
+        }
+
+        if (acceptance_criteria) |acc| {
+            try content.appendSlice(allocator, "## Acceptance Criteria\n\n");
+            try content.appendSlice(allocator, acc);
+            try content.appendSlice(allocator, "\n\n");
+        }
+
+        if (notes) |nts| {
+            try content.appendSlice(allocator, "## Notes\n\n");
+            try content.appendSlice(allocator, nts);
+            try content.appendSlice(allocator, "\n\n");
+        }
+
+        // Write file
+        try std.fs.cwd().writeFile(.{ .sub_path = file_path, .data = content.items });
+
+        // Print progress
+        var buf: [256]u8 = undefined;
+        const msg = try std.fmt.bufPrint(&buf, "Migrated: {s}\n", .{id});
+        try stdout_file.writeAll(msg);
+
+        count += 1;
+    }
+
+    // Print summary
+    var summary_buf: [256]u8 = undefined;
+    const summary = try std.fmt.bufPrint(&summary_buf, "Migrated {d} tickets from beads\n", .{count});
+    try stdout_file.writeAll(summary);
+
+    return 0;
 }
 
 // Helper function to get current timestamp in ISO 8601 format
 fn getCurrentTimestamp(allocator: std.mem.Allocator) ![]u8 {
     const timestamp = std.time.timestamp();
     const epoch_seconds = @as(u64, @intCast(timestamp));
-    
+
     // Calculate date and time components
     const SECONDS_PER_DAY = 86400;
     const SECONDS_PER_HOUR = 3600;
     const SECONDS_PER_MINUTE = 60;
-    
+
     // Days since Unix epoch (1970-01-01)
     const days_since_epoch = epoch_seconds / SECONDS_PER_DAY;
     const seconds_today = epoch_seconds % SECONDS_PER_DAY;
-    
+
     // Calculate hours, minutes, seconds
     const hours = seconds_today / SECONDS_PER_HOUR;
     const minutes = (seconds_today % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE;
     const seconds = seconds_today % SECONDS_PER_MINUTE;
-    
+
     // Calculate year, month, day from days_since_epoch
     // This is a simplified calculation
     var year: u32 = 1970;
     var remaining_days = days_since_epoch;
-    
+
     // Approximate year
     const days_per_year: u64 = 365;
     const days_per_leap_cycle: u64 = 1461; // 4 years
-    
+
     // Fast forward by 400-year cycles (146097 days)
     const cycles_400 = remaining_days / 146097;
     year += @as(u32, @intCast(cycles_400 * 400));
     remaining_days %= 146097;
-    
+
     // Fast forward by 100-year cycles (36524 days, but not 36525)
     var cycles_100 = remaining_days / 36524;
     if (cycles_100 > 3) cycles_100 = 3;
     year += @as(u32, @intCast(cycles_100 * 100));
     remaining_days -= cycles_100 * 36524;
-    
+
     // Fast forward by 4-year cycles (1461 days)
     const cycles_4 = remaining_days / days_per_leap_cycle;
     year += @as(u32, @intCast(cycles_4 * 4));
     remaining_days %= days_per_leap_cycle;
-    
+
     // Remaining years
     var cycles_1 = remaining_days / days_per_year;
     if (cycles_1 > 3) cycles_1 = 3;
     year += @as(u32, @intCast(cycles_1));
     remaining_days -= cycles_1 * days_per_year;
-    
+
     // Determine if current year is a leap year
     const is_leap = (year % 4 == 0 and year % 100 != 0) or (year % 400 == 0);
-    
+
     // Days in each month
-    const days_in_month = [12]u8{
-        31, if (is_leap) 29 else 28, 31, 30, 31, 30,
-        31, 31, 30, 31, 30, 31
-    };
-    
+    const days_in_month = [12]u8{ 31, if (is_leap) 29 else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+
     // Calculate month and day
     var month: u8 = 1;
     var day_of_month = remaining_days + 1;
-    
+
     for (days_in_month) |days| {
         if (day_of_month <= days) break;
         day_of_month -= days;
         month += 1;
     }
-    
+
     // Format as ISO 8601: YYYY-MM-DDTHH:MM:SSZ
-    return try std.fmt.allocPrint(
-        allocator,
-        "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}Z",
-        .{ year, month, day_of_month, hours, minutes, seconds }
-    );
+    return try std.fmt.allocPrint(allocator, "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}Z", .{ year, month, day_of_month, hours, minutes, seconds });
 }
 
 fn generateTicketID(allocator: std.mem.Allocator) ![]u8 {
     const cwd = try std.fs.cwd().realpathAlloc(allocator, ".");
     defer allocator.free(cwd);
-    
+
     const dir_name = std.fs.path.basename(cwd);
-    
+
     // Extract first letter of each hyphenated/underscored segment
     var prefix: std.ArrayList(u8) = .empty;
     defer prefix.deinit(allocator);
-    
+
     var iter = std.mem.tokenizeAny(u8, dir_name, "-_");
     while (iter.next()) |segment| {
         if (segment.len > 0) {
             try prefix.append(allocator, segment[0]);
         }
     }
-    
+
     // Fallback to first 3 chars if no segments
     const prefix_str = if (prefix.items.len > 0)
         try allocator.dupe(u8, prefix.items)
@@ -1765,20 +1942,20 @@ fn generateTicketID(allocator: std.mem.Allocator) ![]u8 {
     else
         try allocator.dupe(u8, dir_name);
     defer allocator.free(prefix_str);
-    
+
     // Generate 4-char hash from timestamp + PID
     const timestamp = std.time.timestamp();
     const pid = std.c.getpid();
-    
+
     var entropy_buf: [64]u8 = undefined;
     const entropy = try std.fmt.bufPrint(&entropy_buf, "{d}{d}", .{ pid, timestamp });
-    
+
     var hash: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(entropy, &hash, .{});
-    
+
     var hash_str: [4]u8 = undefined;
     _ = try std.fmt.bufPrint(&hash_str, "{x:0>4}", .{@as(u16, @intCast(hash[0])) << 8 | @as(u16, @intCast(hash[1]))});
-    
+
     return try std.fmt.allocPrint(allocator, "{s}-{s}", .{ prefix_str, &hash_str });
 }
 
@@ -1799,16 +1976,16 @@ fn getGitUserName(allocator: std.mem.Allocator) !?[]u8 {
     };
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
-    
+
     if (result.term.Exited != 0) {
         return null;
     }
-    
+
     const trimmed = std.mem.trim(u8, result.stdout, " \t\n\r");
     if (trimmed.len == 0) {
         return null;
     }
-    
+
     return try allocator.dupe(u8, trimmed);
 }
 
