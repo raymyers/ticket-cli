@@ -829,11 +829,50 @@ fn handleUnlink(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
 }
 
 fn handleEdit(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
-    _ = allocator;
-    _ = args;
-    const stdout = stdout_file;
-    try stdout.writeAll("Error: edit command not yet implemented\n");
-    return 1;
+    if (args.len < 1) {
+        try stderr_file.writeAll("Usage: ticket edit <id>\n");
+        return 1;
+    }
+
+    const ticket_id = args[0];
+
+    // Resolve ticket ID
+    const file_path = resolveTicketID(allocator, ticket_id) catch |err| {
+        var buf: [512]u8 = undefined;
+        const msg = if (err == error.NotFound)
+            try std.fmt.bufPrint(&buf, "Error: ticket '{s}' not found\n", .{ticket_id})
+        else if (err == error.Ambiguous)
+            try std.fmt.bufPrint(&buf, "Error: ambiguous ID '{s}' matches multiple tickets\n", .{ticket_id})
+        else
+            try std.fmt.bufPrint(&buf, "Error resolving ticket ID\n", .{});
+        try stderr_file.writeAll(msg);
+        return 1;
+    };
+    defer allocator.free(file_path);
+
+    // Check if stdin and stdout are both TTY
+    const stdin_is_tty = std.posix.isatty(std.posix.STDIN_FILENO);
+    const stdout_is_tty = std.posix.isatty(std.posix.STDOUT_FILENO);
+    const is_tty = stdin_is_tty and stdout_is_tty;
+
+    if (is_tty) {
+        // Open in editor
+        const editor = std.posix.getenv("EDITOR") orelse "vi";
+        
+        var child = std.process.Child.init(&[_][]const u8{ editor, file_path }, allocator);
+        child.stdin_behavior = .Inherit;
+        child.stdout_behavior = .Inherit;
+        child.stderr_behavior = .Inherit;
+        
+        _ = try child.spawnAndWait();
+    } else {
+        // Non-TTY mode: just print the file path
+        var buf: [512]u8 = undefined;
+        const msg = try std.fmt.bufPrint(&buf, "Edit ticket file: {s}\n", .{file_path});
+        try stdout_file.writeAll(msg);
+    }
+
+    return 0;
 }
 
 fn handleAddNote(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
