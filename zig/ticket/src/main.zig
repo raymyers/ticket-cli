@@ -1,6 +1,8 @@
 const std = @import("std");
 
 const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
+const tickets_dir = ".tickets";
 
 pub fn main() !u8 {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -172,19 +174,177 @@ fn handleClosedList(allocator: std.mem.Allocator, args: []const [:0]const u8) !u
 }
 
 fn handleDep(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
-    _ = allocator;
-    _ = args;
-    const stdout = stdout_file;
-    try stdout.writeAll("Error: dep command not yet implemented\n");
-    return 1;
+    // Handle subcommands
+    if (args.len > 0 and std.mem.eql(u8, args[0], "tree")) {
+        return handleDepTree(allocator, args[1..]);
+    }
+    
+    if (args.len < 2) {
+        try stderr_file.writeAll("Usage: ticket dep <id> <dependency-id>\n");
+        try stderr_file.writeAll("       ticket dep tree [--full] <id>  - show dependency tree\n");
+        return 1;
+    }
+
+    const ticket_id = args[0];
+    const dep_id = args[1];
+
+    // Resolve both ticket IDs
+    const file_path = resolveTicketID(allocator, ticket_id) catch |err| {
+        var buf: [512]u8 = undefined;
+        const msg = if (err == error.NotFound)
+            try std.fmt.bufPrint(&buf, "Error: ticket '{s}' not found\n", .{ticket_id})
+        else if (err == error.Ambiguous)
+            try std.fmt.bufPrint(&buf, "Error: ambiguous ID '{s}' matches multiple tickets\n", .{ticket_id})
+        else
+            try std.fmt.bufPrint(&buf, "Error resolving ticket ID\n", .{});
+        try stderr_file.writeAll(msg);
+        return 1;
+    };
+    defer allocator.free(file_path);
+
+    const dep_path = resolveTicketID(allocator, dep_id) catch |err| {
+        var buf: [512]u8 = undefined;
+        const msg = if (err == error.NotFound)
+            try std.fmt.bufPrint(&buf, "Error: ticket '{s}' not found\n", .{dep_id})
+        else if (err == error.Ambiguous)
+            try std.fmt.bufPrint(&buf, "Error: ambiguous ID '{s}' matches multiple tickets\n", .{dep_id})
+        else
+            try std.fmt.bufPrint(&buf, "Error resolving ticket ID\n", .{});
+        try stderr_file.writeAll(msg);
+        return 1;
+    };
+    defer allocator.free(dep_path);
+
+    // Get actual IDs from file stems
+    const actual_id = try getTicketIDFromPath(allocator, file_path);
+    defer allocator.free(actual_id);
+    const actual_dep_id = try getTicketIDFromPath(allocator, dep_path);
+    defer allocator.free(actual_dep_id);
+
+    // Read current ticket
+    const content = std.fs.cwd().readFileAlloc(allocator, file_path, 1024 * 1024) catch {
+        try stderr_file.writeAll("Error reading ticket\n");
+        return 1;
+    };
+    defer allocator.free(content);
+
+    // Parse deps field
+    const existing_deps = try parseListField(allocator, content, "deps");
+    defer {
+        for (existing_deps) |dep| {
+            allocator.free(dep);
+        }
+        allocator.free(existing_deps);
+    }
+
+    // Check if dependency already exists
+    for (existing_deps) |dep| {
+        if (std.mem.eql(u8, dep, actual_dep_id)) {
+            try stdout_file.writeAll("Dependency already exists\n");
+            return 0;
+        }
+    }
+
+    // Add new dependency
+    const new_deps = try allocator.alloc([]const u8, existing_deps.len + 1);
+    defer allocator.free(new_deps);
+    for (existing_deps, 0..) |dep, i| {
+        new_deps[i] = dep;
+    }
+    new_deps[existing_deps.len] = actual_dep_id;
+
+    // Update the file
+    try updateYAMLField(allocator, file_path, "deps", new_deps);
+
+    var buf: [512]u8 = undefined;
+    const msg = try std.fmt.bufPrint(&buf, "Added dependency: {s} -> {s}\n", .{ actual_id, actual_dep_id });
+    try stdout_file.writeAll(msg);
+    return 0;
 }
 
 fn handleUndep(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
-    _ = allocator;
-    _ = args;
-    const stdout = stdout_file;
-    try stdout.writeAll("Error: undep command not yet implemented\n");
-    return 1;
+    if (args.len < 2) {
+        try stderr_file.writeAll("Usage: ticket undep <id> <dependency-id>\n");
+        return 1;
+    }
+
+    const ticket_id = args[0];
+    const dep_id = args[1];
+
+    // Resolve both ticket IDs
+    const file_path = resolveTicketID(allocator, ticket_id) catch |err| {
+        var buf: [512]u8 = undefined;
+        const msg = if (err == error.NotFound)
+            try std.fmt.bufPrint(&buf, "Error: ticket '{s}' not found\n", .{ticket_id})
+        else if (err == error.Ambiguous)
+            try std.fmt.bufPrint(&buf, "Error: ambiguous ID '{s}' matches multiple tickets\n", .{ticket_id})
+        else
+            try std.fmt.bufPrint(&buf, "Error resolving ticket ID\n", .{});
+        try stderr_file.writeAll(msg);
+        return 1;
+    };
+    defer allocator.free(file_path);
+
+    const dep_path = resolveTicketID(allocator, dep_id) catch |err| {
+        var buf: [512]u8 = undefined;
+        const msg = if (err == error.NotFound)
+            try std.fmt.bufPrint(&buf, "Error: ticket '{s}' not found\n", .{dep_id})
+        else if (err == error.Ambiguous)
+            try std.fmt.bufPrint(&buf, "Error: ambiguous ID '{s}' matches multiple tickets\n", .{dep_id})
+        else
+            try std.fmt.bufPrint(&buf, "Error resolving ticket ID\n", .{});
+        try stderr_file.writeAll(msg);
+        return 1;
+    };
+    defer allocator.free(dep_path);
+
+    // Get actual IDs from file stems
+    const actual_id = try getTicketIDFromPath(allocator, file_path);
+    defer allocator.free(actual_id);
+    const actual_dep_id = try getTicketIDFromPath(allocator, dep_path);
+    defer allocator.free(actual_dep_id);
+
+    // Read current ticket
+    const content = std.fs.cwd().readFileAlloc(allocator, file_path, 1024 * 1024) catch {
+        try stderr_file.writeAll("Error reading ticket\n");
+        return 1;
+    };
+    defer allocator.free(content);
+
+    // Parse deps field
+    const existing_deps = try parseListField(allocator, content, "deps");
+    defer {
+        for (existing_deps) |dep| {
+            allocator.free(dep);
+        }
+        allocator.free(existing_deps);
+    }
+
+    // Check if dependency exists and build new list without it
+    var found = false;
+    var new_deps: std.ArrayList([]const u8) = .empty;
+    defer new_deps.deinit(allocator);
+    
+    for (existing_deps) |dep| {
+        if (std.mem.eql(u8, dep, actual_dep_id)) {
+            found = true;
+        } else {
+            try new_deps.append(allocator, dep);
+        }
+    }
+
+    if (!found) {
+        try stdout_file.writeAll("Dependency not found\n");
+        return 1;
+    }
+
+    // Update the file
+    try updateYAMLField(allocator, file_path, "deps", new_deps.items);
+
+    var buf: [512]u8 = undefined;
+    const msg = try std.fmt.bufPrint(&buf, "Removed dependency: {s} -/-> {s}\n", .{ actual_id, actual_dep_id });
+    try stdout_file.writeAll(msg);
+    return 0;
 }
 
 fn handleLink(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
@@ -233,6 +393,417 @@ fn handleMigrateBeads(allocator: std.mem.Allocator, args: []const [:0]const u8) 
     const stdout = stdout_file;
     try stdout.writeAll("Error: migrate-beads command not yet implemented\n");
     return 1;
+}
+
+// Helper function to resolve ticket ID (exact or partial match)
+fn resolveTicketID(allocator: std.mem.Allocator, ticket_id: []const u8) ![]const u8 {
+    // Try exact match first
+    const exact_path = try std.fmt.allocPrint(allocator, "{s}/{s}.md", .{ tickets_dir, ticket_id });
+    defer allocator.free(exact_path);
+    
+    if (std.fs.cwd().access(exact_path, .{})) {
+        return try allocator.dupe(u8, exact_path);
+    } else |err| {
+        if (err != error.FileNotFound) {
+            return err;
+        }
+    }
+    
+    // Try partial match
+    var dir = std.fs.cwd().openDir(tickets_dir, .{ .iterate = true }) catch {
+        return error.NotFound;
+    };
+    defer dir.close();
+    
+    var iter = dir.iterate();
+    var matches: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (matches.items) |match| {
+            allocator.free(match);
+        }
+        matches.deinit(allocator);
+    }
+    
+    while (try iter.next()) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.name, ".md")) continue;
+        
+        if (std.mem.indexOf(u8, entry.name, ticket_id) != null) {
+            const match = try allocator.dupe(u8, entry.name);
+            try matches.append(allocator, match);
+        }
+    }
+    
+    if (matches.items.len == 0) {
+        return error.NotFound;
+    } else if (matches.items.len > 1) {
+        return error.Ambiguous;
+    }
+    
+    return try std.fmt.allocPrint(allocator, "{s}/{s}", .{ tickets_dir, matches.items[0] });
+}
+
+// Helper function to extract ticket ID from file path
+fn getTicketIDFromPath(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
+    const basename = std.fs.path.basename(path);
+    if (std.mem.endsWith(u8, basename, ".md")) {
+        return try allocator.dupe(u8, basename[0 .. basename.len - 3]);
+    }
+    return try allocator.dupe(u8, basename);
+}
+
+// Helper function to parse a list field from ticket content
+fn parseListField(allocator: std.mem.Allocator, content: []const u8, field: []const u8) ![][]const u8 {
+    var result: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (result.items) |item| {
+            allocator.free(item);
+        }
+        result.deinit(allocator);
+    }
+    
+    var lines = std.mem.splitScalar(u8, content, '\n');
+    var in_frontmatter = false;
+    var frontmatter_count: u8 = 0;
+    
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        
+        if (std.mem.eql(u8, trimmed, "---")) {
+            frontmatter_count += 1;
+            if (frontmatter_count == 1) {
+                in_frontmatter = true;
+            } else if (frontmatter_count == 2) {
+                break;
+            }
+            continue;
+        }
+        
+        if (!in_frontmatter) continue;
+        
+        if (std.mem.startsWith(u8, trimmed, field)) {
+            const colon_idx = std.mem.indexOfScalar(u8, trimmed, ':') orelse continue;
+            const value_start = colon_idx + 1;
+            if (value_start >= trimmed.len) break;
+            
+            const value = std.mem.trim(u8, trimmed[value_start..], " \t");
+            
+            // Parse array syntax: [item1, item2, ...]
+            if (std.mem.startsWith(u8, value, "[") and std.mem.endsWith(u8, value, "]")) {
+                const inner = value[1 .. value.len - 1];
+                const inner_trimmed = std.mem.trim(u8, inner, " \t");
+                
+                if (inner_trimmed.len == 0) {
+                    break;
+                }
+                
+                var items = std.mem.splitScalar(u8, inner_trimmed, ',');
+                while (items.next()) |item| {
+                    const item_trimmed = std.mem.trim(u8, item, " \t");
+                    if (item_trimmed.len > 0) {
+                        try result.append(allocator, try allocator.dupe(u8, item_trimmed));
+                    }
+                }
+            }
+            break;
+        }
+    }
+    
+    return try result.toOwnedSlice(allocator);
+}
+
+// Helper function to update a YAML field in a ticket file
+fn updateYAMLField(allocator: std.mem.Allocator, file_path: []const u8, field: []const u8, values: []const []const u8) !void {
+    const content = try std.fs.cwd().readFileAlloc(allocator, file_path, 1024 * 1024);
+    defer allocator.free(content);
+    
+    var result: std.ArrayList(u8) = .empty;
+    defer result.deinit(allocator);
+    
+    var lines = std.mem.splitScalar(u8, content, '\n');
+    var in_frontmatter = false;
+    var frontmatter_count: u8 = 0;
+    var updated = false;
+    
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        
+        if (std.mem.eql(u8, trimmed, "---")) {
+            try result.appendSlice(allocator, line);
+            try result.append(allocator, '\n');
+            frontmatter_count += 1;
+            if (frontmatter_count == 1) {
+                in_frontmatter = true;
+            } else if (frontmatter_count == 2) {
+                in_frontmatter = false;
+            }
+            continue;
+        }
+        
+        if (in_frontmatter and std.mem.startsWith(u8, trimmed, field) and std.mem.indexOfScalar(u8, trimmed, ':') != null) {
+            // Replace this field
+            try result.appendSlice(allocator, field);
+            try result.appendSlice(allocator, ": [");
+            for (values, 0..) |value, i| {
+                if (i > 0) {
+                    try result.appendSlice(allocator, ", ");
+                }
+                try result.appendSlice(allocator, value);
+            }
+            try result.appendSlice(allocator, "]\n");
+            updated = true;
+        } else {
+            try result.appendSlice(allocator, line);
+            try result.append(allocator, '\n');
+        }
+    }
+    
+    // If field wasn't found, we'd need to add it (not implemented for simplicity)
+    if (!updated) {
+        return error.FieldNotFound;
+    }
+    
+    // Write back to file
+    try std.fs.cwd().writeFile(.{ .sub_path = file_path, .data = result.items });
+}
+
+// Helper struct for ticket data
+const TicketData = struct {
+    id: []const u8,
+    status: []const u8,
+    title: []const u8,
+    deps: [][]const u8,
+    allocator: std.mem.Allocator,
+    
+    fn deinit(self: *TicketData) void {
+        self.allocator.free(self.id);
+        self.allocator.free(self.status);
+        self.allocator.free(self.title);
+        for (self.deps) |dep| {
+            self.allocator.free(dep);
+        }
+        self.allocator.free(self.deps);
+    }
+};
+
+// Helper function to parse a ticket file
+fn parseTicket(allocator: std.mem.Allocator, file_path: []const u8) !TicketData {
+    const content = try std.fs.cwd().readFileAlloc(allocator, file_path, 1024 * 1024);
+    defer allocator.free(content);
+    
+    var id: []const u8 = "";
+    var status: []const u8 = "open";
+    var title: []const u8 = "";
+    var deps: std.ArrayList([]const u8) = .empty;
+    
+    var lines = std.mem.splitScalar(u8, content, '\n');
+    var in_frontmatter = false;
+    var frontmatter_count: u8 = 0;
+    var after_frontmatter = false;
+    
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        
+        if (std.mem.eql(u8, trimmed, "---")) {
+            frontmatter_count += 1;
+            if (frontmatter_count == 1) {
+                in_frontmatter = true;
+            } else if (frontmatter_count == 2) {
+                in_frontmatter = false;
+                after_frontmatter = true;
+            }
+            continue;
+        }
+        
+        if (in_frontmatter) {
+            if (std.mem.startsWith(u8, trimmed, "id:")) {
+                const colon_idx = std.mem.indexOfScalar(u8, trimmed, ':') orelse continue;
+                id = std.mem.trim(u8, trimmed[colon_idx + 1 ..], " \t");
+            } else if (std.mem.startsWith(u8, trimmed, "status:")) {
+                const colon_idx = std.mem.indexOfScalar(u8, trimmed, ':') orelse continue;
+                status = std.mem.trim(u8, trimmed[colon_idx + 1 ..], " \t");
+            } else if (std.mem.startsWith(u8, trimmed, "deps:")) {
+                const colon_idx = std.mem.indexOfScalar(u8, trimmed, ':') orelse continue;
+                const value = std.mem.trim(u8, trimmed[colon_idx + 1 ..], " \t");
+                if (std.mem.startsWith(u8, value, "[") and std.mem.endsWith(u8, value, "]")) {
+                    const inner = value[1 .. value.len - 1];
+                    const inner_trimmed = std.mem.trim(u8, inner, " \t");
+                    if (inner_trimmed.len > 0) {
+                        var items = std.mem.splitScalar(u8, inner_trimmed, ',');
+                        while (items.next()) |item| {
+                            const item_trimmed = std.mem.trim(u8, item, " \t");
+                            if (item_trimmed.len > 0) {
+                                try deps.append(allocator, try allocator.dupe(u8, item_trimmed));
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (after_frontmatter and title.len == 0) {
+            if (std.mem.startsWith(u8, trimmed, "# ")) {
+                title = std.mem.trim(u8, trimmed[2..], " \t");
+                break;
+            }
+        }
+    }
+    
+    return TicketData{
+        .id = try allocator.dupe(u8, id),
+        .status = try allocator.dupe(u8, status),
+        .title = try allocator.dupe(u8, title),
+        .deps = try deps.toOwnedSlice(allocator),
+        .allocator = allocator,
+    };
+}
+
+// Helper function to load all tickets
+fn loadAllTickets(allocator: std.mem.Allocator) !std.StringHashMap(TicketData) {
+    var tickets = std.StringHashMap(TicketData).init(allocator);
+    errdefer {
+        var iter = tickets.valueIterator();
+        while (iter.next()) |ticket| {
+            var t = ticket.*;
+            t.deinit();
+        }
+        tickets.deinit();
+    }
+    
+    var dir = std.fs.cwd().openDir(tickets_dir, .{ .iterate = true }) catch {
+        return tickets;
+    };
+    defer dir.close();
+    
+    var iter = dir.iterate();
+    while (try iter.next()) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.name, ".md")) continue;
+        
+        const file_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ tickets_dir, entry.name });
+        defer allocator.free(file_path);
+        
+        const ticket = parseTicket(allocator, file_path) catch continue;
+        if (ticket.id.len > 0) {
+            const key = try allocator.dupe(u8, ticket.id);
+            try tickets.put(key, ticket);
+        }
+    }
+    
+    return tickets;
+}
+
+// Handle dep tree subcommand
+fn handleDepTree(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
+    var full_mode = false;
+    var root_id: ?[]const u8 = null;
+    
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "--full")) {
+            full_mode = true;
+        } else {
+            root_id = arg;
+        }
+    }
+    
+    if (root_id == null) {
+        try stderr_file.writeAll("Usage: ticket dep tree [--full] <id>\n");
+        return 1;
+    }
+    
+    // Load all tickets
+    var tickets = try loadAllTickets(allocator);
+    defer {
+        var iter = tickets.iterator();
+        while (iter.next()) |entry| {
+            allocator.free(entry.key_ptr.*);
+            var ticket = entry.value_ptr.*;
+            ticket.deinit();
+        }
+        tickets.deinit();
+    }
+    
+    if (tickets.count() == 0) {
+        var buf: [512]u8 = undefined;
+        const msg = try std.fmt.bufPrint(&buf, "Error: ticket {s} not found\n", .{root_id.?});
+        try stderr_file.writeAll(msg);
+        return 1;
+    }
+    
+    // Resolve partial ID
+    var root: ?[]const u8 = null;
+    var iter = tickets.keyIterator();
+    while (iter.next()) |ticket_id| {
+        if (std.mem.indexOf(u8, ticket_id.*, root_id.?) != null) {
+            if (root != null) {
+                var buf: [512]u8 = undefined;
+                const msg = try std.fmt.bufPrint(&buf, "Error: ambiguous ID {s}\n", .{root_id.?});
+                try stderr_file.writeAll(msg);
+                return 1;
+            }
+            root = ticket_id.*;
+        }
+    }
+    
+    if (root == null) {
+        var buf: [512]u8 = undefined;
+        const msg = try std.fmt.bufPrint(&buf, "Error: ticket {s} not found\n", .{root_id.?});
+        try stderr_file.writeAll(msg);
+        return 1;
+    }
+    
+    // Print tree
+    var printed = std.StringHashMap(void).init(allocator);
+    defer printed.deinit();
+    
+    try printDepTree(allocator, &tickets, root.?, "", true, root.?, &printed, full_mode);
+    
+    return 0;
+}
+
+// Recursive function to print dependency tree
+fn printDepTree(
+    allocator: std.mem.Allocator,
+    tickets: *std.StringHashMap(TicketData),
+    ticket_id: []const u8,
+    prefix: []const u8,
+    is_last: bool,
+    root: []const u8,
+    printed: *std.StringHashMap(void),
+    full_mode: bool,
+) !void {
+    // Skip if already printed in non-full mode
+    if (!full_mode and printed.contains(ticket_id)) {
+        return;
+    }
+    
+    const ticket = tickets.get(ticket_id) orelse return;
+    
+    // Print current ticket
+    var buf: [1024]u8 = undefined;
+    const msg = if (std.mem.eql(u8, ticket_id, root))
+        try std.fmt.bufPrint(&buf, "{s} [{s}] {s}\n", .{ ticket_id, ticket.status, ticket.title })
+    else blk: {
+        const connector = if (is_last) "└── " else "├── ";
+        break :blk try std.fmt.bufPrint(&buf, "{s}{s}{s} [{s}] {s}\n", .{ prefix, connector, ticket_id, ticket.status, ticket.title });
+    };
+    try stdout_file.writeAll(msg);
+    
+    try printed.put(try allocator.dupe(u8, ticket_id), {});
+    
+    // Print dependencies
+    if (ticket.deps.len > 0) {
+        const new_prefix = if (std.mem.eql(u8, ticket_id, root))
+            try allocator.dupe(u8, "")
+        else if (is_last)
+            try std.fmt.allocPrint(allocator, "{s}    ", .{prefix})
+        else
+            try std.fmt.allocPrint(allocator, "{s}│   ", .{prefix});
+        defer allocator.free(new_prefix);
+        
+        for (ticket.deps, 0..) |dep_id, i| {
+            const is_last_dep = (i == ticket.deps.len - 1);
+            try printDepTree(allocator, tickets, dep_id, new_prefix, is_last_dep, root, printed, full_mode);
+        }
+    }
 }
 
 test "basic CLI argument parsing" {
