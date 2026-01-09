@@ -391,6 +391,49 @@ def cmd_show(args: list[str]) -> int:
     return 0
 
 
+def cmd_add_note(args: list[str]) -> int:
+    """Add a timestamped note to a ticket."""
+    if not args:
+        print("Usage: ticket add-note <id> [note text]", file=sys.stderr)
+        return 1
+
+    ticket_id = args[0]
+
+    try:
+        file_path = ticket_path(ticket_id)
+    except SystemExit:
+        return 1
+
+    target_id = file_path.stem
+
+    # Get note text from args or stdin
+    if len(args) > 1:
+        note = " ".join(args[1:])
+    elif not sys.stdin.isatty():
+        note = sys.stdin.read().strip()
+    else:
+        print("Error: no note provided", file=sys.stderr)
+        return 1
+
+    timestamp = iso_date()
+
+    # Read existing content
+    content = file_path.read_text()
+
+    # Add Notes section if missing
+    if "## Notes" not in content:
+        content += "\n## Notes\n"
+
+    # Append timestamped note
+    content += f"\n**{timestamp}**\n\n{note}\n"
+
+    # Write back
+    file_path.write_text(content)
+
+    print(f"Note added to {target_id}")
+    return 0
+
+
 def main() -> int:
     """Main entry point for the ticket CLI."""
     args = sys.argv[1:]
@@ -406,6 +449,8 @@ def main() -> int:
         return cmd_create(command_args)
     elif command == "show":
         return cmd_show(command_args)
+    elif command == "add-note":
+        return cmd_add_note(command_args)
 
     print("Ticket CLI - Python port (work in progress)")
     print(f"Command not yet implemented: {command}")
