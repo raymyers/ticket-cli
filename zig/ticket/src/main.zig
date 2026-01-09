@@ -678,11 +678,91 @@ fn handleEdit(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
 }
 
 fn handleAddNote(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
-    _ = allocator;
-    _ = args;
-    const stdout = stdout_file;
-    try stdout.writeAll("Error: add-note command not yet implemented\n");
-    return 1;
+    if (args.len < 1) {
+        try stderr_file.writeAll("Usage: ticket add-note <id> [note text]\n");
+        return 1;
+    }
+
+    const ticket_id = args[0];
+    
+    // Get note text from remaining args
+    const note_text = if (args.len > 1) blk: {
+        var result: std.ArrayList(u8) = .empty;
+        defer result.deinit(allocator);
+        
+        for (args[1..], 0..) |arg, i| {
+            if (i > 0) try result.append(allocator, ' ');
+            try result.appendSlice(allocator, arg);
+        }
+        break :blk try result.toOwnedSlice(allocator);
+    } else "";
+    defer if (args.len > 1) allocator.free(note_text);
+
+    // Resolve ticket ID
+    const file_path = resolveTicketID(allocator, ticket_id) catch |err| {
+        var buf: [512]u8 = undefined;
+        const msg = if (err == error.NotFound)
+            try std.fmt.bufPrint(&buf, "Error: ticket '{s}' not found\n", .{ticket_id})
+        else if (err == error.Ambiguous)
+            try std.fmt.bufPrint(&buf, "Error: ambiguous ID '{s}' matches multiple tickets\n", .{ticket_id})
+        else
+            try std.fmt.bufPrint(&buf, "Error resolving ticket ID\n", .{});
+        try stderr_file.writeAll(msg);
+        return 1;
+    };
+    defer allocator.free(file_path);
+
+    // Extract the target ID from the file path
+    const target_id = blk: {
+        const basename = std.fs.path.basename(file_path);
+        if (std.mem.endsWith(u8, basename, ".md")) {
+            break :blk basename[0 .. basename.len - 3];
+        }
+        break :blk basename;
+    };
+
+    // Read existing content
+    const content = try std.fs.cwd().readFileAlloc(allocator, file_path, 1024 * 1024);
+    defer allocator.free(content);
+
+    // Get current timestamp
+    const timestamp = try getCurrentTimestamp(allocator);
+    defer allocator.free(timestamp);
+
+    // Build new content
+    var result: std.ArrayList(u8) = .empty;
+    defer result.deinit(allocator);
+
+    // Check if Notes section exists
+    const has_notes = std.mem.indexOf(u8, content, "## Notes") != null;
+    
+    if (has_notes) {
+        // Append to existing content
+        try result.appendSlice(allocator, content);
+    } else {
+        // Add Notes section
+        try result.appendSlice(allocator, content);
+        if (!std.mem.endsWith(u8, content, "\n")) {
+            try result.append(allocator, '\n');
+        }
+        try result.appendSlice(allocator, "\n## Notes\n");
+    }
+
+    // Append timestamped note
+    try result.append(allocator, '\n');
+    try result.appendSlice(allocator, "**");
+    try result.appendSlice(allocator, timestamp);
+    try result.appendSlice(allocator, "**\n\n");
+    try result.appendSlice(allocator, note_text);
+    try result.append(allocator, '\n');
+
+    // Write back to file
+    try std.fs.cwd().writeFile(.{ .sub_path = file_path, .data = result.items });
+
+    var buf: [512]u8 = undefined;
+    const msg = try std.fmt.bufPrint(&buf, "Note added to {s}\n", .{target_id});
+    try stdout_file.writeAll(msg);
+    return 0;
 }
 
 fn handleQuery(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
@@ -699,6 +779,83 @@ fn handleMigrateBeads(allocator: std.mem.Allocator, args: []const [:0]const u8) 
     const stdout = stdout_file;
     try stdout.writeAll("Error: migrate-beads command not yet implemented\n");
     return 1;
+}
+
+// Helper function to get current timestamp in ISO 8601 format
+fn getCurrentTimestamp(allocator: std.mem.Allocator) ![]u8 {
+    const timestamp = std.time.timestamp();
+    const epoch_seconds = @as(u64, @intCast(timestamp));
+    
+    // Calculate date and time components
+    const SECONDS_PER_DAY = 86400;
+    const SECONDS_PER_HOUR = 3600;
+    const SECONDS_PER_MINUTE = 60;
+    
+    // Days since Unix epoch (1970-01-01)
+    const days_since_epoch = epoch_seconds / SECONDS_PER_DAY;
+    const seconds_today = epoch_seconds % SECONDS_PER_DAY;
+    
+    // Calculate hours, minutes, seconds
+    const hours = seconds_today / SECONDS_PER_HOUR;
+    const minutes = (seconds_today % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE;
+    const seconds = seconds_today % SECONDS_PER_MINUTE;
+    
+    // Calculate year, month, day from days_since_epoch
+    // This is a simplified calculation
+    var year: u32 = 1970;
+    var remaining_days = days_since_epoch;
+    
+    // Approximate year
+    const days_per_year: u64 = 365;
+    const days_per_leap_cycle: u64 = 1461; // 4 years
+    
+    // Fast forward by 400-year cycles (146097 days)
+    const cycles_400 = remaining_days / 146097;
+    year += @as(u32, @intCast(cycles_400 * 400));
+    remaining_days %= 146097;
+    
+    // Fast forward by 100-year cycles (36524 days, but not 36525)
+    var cycles_100 = remaining_days / 36524;
+    if (cycles_100 > 3) cycles_100 = 3;
+    year += @as(u32, @intCast(cycles_100 * 100));
+    remaining_days -= cycles_100 * 36524;
+    
+    // Fast forward by 4-year cycles (1461 days)
+    const cycles_4 = remaining_days / days_per_leap_cycle;
+    year += @as(u32, @intCast(cycles_4 * 4));
+    remaining_days %= days_per_leap_cycle;
+    
+    // Remaining years
+    var cycles_1 = remaining_days / days_per_year;
+    if (cycles_1 > 3) cycles_1 = 3;
+    year += @as(u32, @intCast(cycles_1));
+    remaining_days -= cycles_1 * days_per_year;
+    
+    // Determine if current year is a leap year
+    const is_leap = (year % 4 == 0 and year % 100 != 0) or (year % 400 == 0);
+    
+    // Days in each month
+    const days_in_month = [12]u8{
+        31, if (is_leap) 29 else 28, 31, 30, 31, 30,
+        31, 31, 30, 31, 30, 31
+    };
+    
+    // Calculate month and day
+    var month: u8 = 1;
+    var day_of_month = remaining_days + 1;
+    
+    for (days_in_month) |days| {
+        if (day_of_month <= days) break;
+        day_of_month -= days;
+        month += 1;
+    }
+    
+    // Format as ISO 8601: YYYY-MM-DDTHH:MM:SSZ
+    return try std.fmt.allocPrint(
+        allocator,
+        "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}Z",
+        .{ year, month, day_of_month, hours, minutes, seconds }
+    );
 }
 
 // Helper function to resolve ticket ID (exact or partial match)
