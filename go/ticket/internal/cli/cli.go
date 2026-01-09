@@ -54,6 +54,10 @@ func Run(args []string) int {
 		return cmdBlocked(commandArgs)
 	case "closed":
 		return cmdClosed(commandArgs)
+	case "dep":
+		return cmdDep(commandArgs)
+	case "link":
+		return cmdLink(commandArgs)
 	default:
 		fmt.Println("Ticket CLI - Go port (work in progress)")
 		fmt.Printf("Command not yet implemented: %s\n", command)
@@ -1305,6 +1309,137 @@ func cmdClosed(args []string) int {
 
 	for _, ct := range closedTickets {
 		fmt.Printf("%-8s [%s] - %s\n", ct.id, ct.status, ct.title)
+	}
+
+	return 0
+}
+
+func cmdDep(args []string) int {
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "Usage: ticket dep <id> <dependency-id>")
+		return 1
+	}
+
+	ticketID := args[0]
+	depID := args[1]
+
+	// Resolve both ticket IDs
+	filePath, err := resolveTicketID(ticketID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+
+	depPath, err := resolveTicketID(depID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+
+	// Get actual IDs from file stems
+	actualID := strings.TrimSuffix(filepath.Base(filePath), ".md")
+	actualDepID := strings.TrimSuffix(filepath.Base(depPath), ".md")
+
+	// Get current deps
+	ticket, err := parseTicketFull(filePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading ticket: %v\n", err)
+		return 1
+	}
+
+	existingDeps := parseListField(ticket.Frontmatter["deps"])
+
+	// Check if dependency already exists
+	for _, dep := range existingDeps {
+		if dep == actualDepID {
+			fmt.Println("Dependency already exists")
+			return 0
+		}
+	}
+
+	// Add new dependency
+	newDeps := append(existingDeps, actualDepID)
+	newDepsStr := "[" + strings.Join(newDeps, ", ") + "]"
+
+	if err := updateYAMLField(filePath, "deps", newDepsStr); err != nil {
+		fmt.Fprintf(os.Stderr, "Error updating ticket: %v\n", err)
+		return 1
+	}
+
+	fmt.Printf("Added dependency: %s -> %s\n", actualID, actualDepID)
+	return 0
+}
+
+func cmdLink(args []string) int {
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "Usage: ticket link <id> <id> [id...]")
+		return 1
+	}
+
+	// Resolve all ticket IDs to paths first
+	var ticketIDs []string
+	var ticketPaths []string
+
+	for _, ticketID := range args {
+		filePath, err := resolveTicketID(ticketID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		actualID := strings.TrimSuffix(filepath.Base(filePath), ".md")
+		ticketIDs = append(ticketIDs, actualID)
+		ticketPaths = append(ticketPaths, filePath)
+	}
+
+	// For each ticket, add links to all other tickets
+	totalAdded := 0
+
+	for i, filePath := range ticketPaths {
+		currentID := ticketIDs[i]
+		ticket, err := parseTicketFull(filePath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error reading ticket: %v\n", err)
+			return 1
+		}
+
+		// Parse existing links
+		existingLinks := parseListField(ticket.Frontmatter["links"])
+
+		// Determine which links to add
+		var linksToAdd []string
+		for j, otherID := range ticketIDs {
+			if i != j {
+				// Check if link already exists
+				found := false
+				for _, link := range existingLinks {
+					if link == otherID {
+						found = true
+						break
+					}
+				}
+				if !found {
+					linksToAdd = append(linksToAdd, otherID)
+				}
+			}
+		}
+
+		if len(linksToAdd) > 0 {
+			// Add new links
+			newLinks := append(existingLinks, linksToAdd...)
+			newLinksStr := "[" + strings.Join(newLinks, ", ") + "]"
+
+			if err := updateYAMLField(filePath, "links", newLinksStr); err != nil {
+				fmt.Fprintf(os.Stderr, "Error updating ticket %s: %v\n", currentID, err)
+				return 1
+			}
+			totalAdded += len(linksToAdd)
+		}
+	}
+
+	if totalAdded == 0 {
+		fmt.Println("All links already exist")
+	} else {
+		fmt.Printf("Added %d link(s) between %d tickets\n", totalAdded, len(ticketIDs))
 	}
 
 	return 0
