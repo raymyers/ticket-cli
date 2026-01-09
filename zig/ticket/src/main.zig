@@ -4,6 +4,12 @@ const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
 const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
 const tickets_dir = ".tickets";
 
+const RelationshipItem = struct {
+    id: []const u8,
+    status: []const u8,
+    title: []const u8,
+};
+
 pub fn main() !u8 {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -179,7 +185,81 @@ fn handleShow(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
     };
     defer allocator.free(file_path);
 
-    // Read and display the ticket file
+    // Extract the target ID from the file path
+    const target_id = blk: {
+        const basename = std.fs.path.basename(file_path);
+        if (std.mem.endsWith(u8, basename, ".md")) {
+            break :blk basename[0 .. basename.len - 3];
+        }
+        break :blk basename;
+    };
+
+    // Load all tickets to build relationships
+    var all_tickets = try loadAllTickets(allocator);
+    defer {
+        var iter = all_tickets.iterator();
+        while (iter.next()) |entry| {
+            allocator.free(entry.key_ptr.*);
+            var ticket = entry.value_ptr.*;
+            ticket.deinit();
+        }
+        all_tickets.deinit();
+    }
+
+    const target_ticket = all_tickets.get(target_id) orelse {
+        var buf: [512]u8 = undefined;
+        const msg = try std.fmt.bufPrint(&buf, "Error: ticket '{s}' not found\n", .{ticket_id});
+        try stderr_file.writeAll(msg);
+        return 1;
+    };
+
+    // Build relationship lists
+    var blockers: std.ArrayList(RelationshipItem) = .empty;
+    defer blockers.deinit(allocator);
+    var blocking: std.ArrayList(RelationshipItem) = .empty;
+    defer blocking.deinit(allocator);
+    var children: std.ArrayList(RelationshipItem) = .empty;
+    defer children.deinit(allocator);
+    var linked: std.ArrayList(RelationshipItem) = .empty;
+    defer linked.deinit(allocator);
+
+    // Scan all tickets for relationships
+    var iter = all_tickets.iterator();
+    while (iter.next()) |entry| {
+        const tid = entry.key_ptr.*;
+        const ticket = entry.value_ptr.*;
+
+        // Check if this ticket depends on target (target is blocking it)
+        for (ticket.deps) |dep| {
+            if (std.mem.eql(u8, dep, target_id) and !std.mem.eql(u8, ticket.status, "closed")) {
+                try blocking.append(allocator, .{ .id = tid, .status = ticket.status, .title = ticket.title });
+                break;
+            }
+        }
+
+        // Check if this ticket is a child of target
+        if (ticket.parent.len > 0 and std.mem.eql(u8, ticket.parent, target_id)) {
+            try children.append(allocator, .{ .id = tid, .status = ticket.status, .title = ticket.title });
+        }
+    }
+
+    // Find blockers (unclosed dependencies)
+    for (target_ticket.deps) |dep| {
+        if (all_tickets.get(dep)) |dep_ticket| {
+            if (!std.mem.eql(u8, dep_ticket.status, "closed")) {
+                try blockers.append(allocator, .{ .id = dep, .status = dep_ticket.status, .title = dep_ticket.title });
+            }
+        }
+    }
+
+    // Find linked tickets
+    for (target_ticket.links) |link| {
+        if (all_tickets.get(link)) |link_ticket| {
+            try linked.append(allocator, .{ .id = link, .status = link_ticket.status, .title = link_ticket.title });
+        }
+    }
+
+    // Read and display the ticket file with enhancements
     const file = std.fs.cwd().openFile(file_path, .{}) catch {
         var buf: [512]u8 = undefined;
         const msg = try std.fmt.bufPrint(&buf, "Error: could not open ticket file\n", .{});
@@ -194,7 +274,74 @@ fn handleShow(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
     };
     defer allocator.free(content);
 
-    try stdout_file.writeAll(content);
+    // Parse and output with parent field enhancement
+    var lines = std.mem.splitScalar(u8, content, '\n');
+    var in_frontmatter = false;
+    var line_count: usize = 0;
+
+    while (lines.next()) |line| {
+        line_count += 1;
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+
+        if (std.mem.eql(u8, trimmed, "---")) {
+            try stdout_file.writeAll(line);
+            try stdout_file.writeAll("\n");
+            in_frontmatter = !in_frontmatter;
+            continue;
+        }
+
+        if (in_frontmatter and std.mem.startsWith(u8, trimmed, "parent:")) {
+            if (target_ticket.parent.len > 0) {
+                if (all_tickets.get(target_ticket.parent)) |parent_ticket| {
+                    var buf: [1024]u8 = undefined;
+                    const enhanced = try std.fmt.bufPrint(&buf, "{s}  # {s}\n", .{ line, parent_ticket.title });
+                    try stdout_file.writeAll(enhanced);
+                    continue;
+                }
+            }
+        }
+
+        try stdout_file.writeAll(line);
+        try stdout_file.writeAll("\n");
+    }
+
+    // Add relationship sections
+    if (blockers.items.len > 0) {
+        try stdout_file.writeAll("\n## Blockers\n\n");
+        for (blockers.items) |blocker| {
+            var buf: [1024]u8 = undefined;
+            const msg = try std.fmt.bufPrint(&buf, "- {s} [{s}] {s}\n", .{ blocker.id, blocker.status, blocker.title });
+            try stdout_file.writeAll(msg);
+        }
+    }
+
+    if (blocking.items.len > 0) {
+        try stdout_file.writeAll("\n## Blocking\n\n");
+        for (blocking.items) |block| {
+            var buf: [1024]u8 = undefined;
+            const msg = try std.fmt.bufPrint(&buf, "- {s} [{s}] {s}\n", .{ block.id, block.status, block.title });
+            try stdout_file.writeAll(msg);
+        }
+    }
+
+    if (children.items.len > 0) {
+        try stdout_file.writeAll("\n## Children\n\n");
+        for (children.items) |child| {
+            var buf: [1024]u8 = undefined;
+            const msg = try std.fmt.bufPrint(&buf, "- {s} [{s}] {s}\n", .{ child.id, child.status, child.title });
+            try stdout_file.writeAll(msg);
+        }
+    }
+
+    if (linked.items.len > 0) {
+        try stdout_file.writeAll("\n## Linked\n\n");
+        for (linked.items) |link_item| {
+            var buf: [1024]u8 = undefined;
+            const msg = try std.fmt.bufPrint(&buf, "- {s} [{s}] {s}\n", .{ link_item.id, link_item.status, link_item.title });
+            try stdout_file.writeAll(msg);
+        }
+    }
+
     return 0;
 }
 
@@ -781,6 +928,8 @@ const TicketData = struct {
     status: []const u8,
     title: []const u8,
     deps: [][]const u8,
+    links: [][]const u8,
+    parent: []const u8,
     allocator: std.mem.Allocator,
     
     fn deinit(self: *TicketData) void {
@@ -791,6 +940,11 @@ const TicketData = struct {
             self.allocator.free(dep);
         }
         self.allocator.free(self.deps);
+        for (self.links) |link| {
+            self.allocator.free(link);
+        }
+        self.allocator.free(self.links);
+        self.allocator.free(self.parent);
     }
 };
 
@@ -802,7 +956,9 @@ fn parseTicket(allocator: std.mem.Allocator, file_path: []const u8) !TicketData 
     var id: []const u8 = "";
     var status: []const u8 = "open";
     var title: []const u8 = "";
+    var parent: []const u8 = "";
     var deps: std.ArrayList([]const u8) = .empty;
+    var links: std.ArrayList([]const u8) = .empty;
     
     var lines = std.mem.splitScalar(u8, content, '\n');
     var in_frontmatter = false;
@@ -830,6 +986,14 @@ fn parseTicket(allocator: std.mem.Allocator, file_path: []const u8) !TicketData 
             } else if (std.mem.startsWith(u8, trimmed, "status:")) {
                 const colon_idx = std.mem.indexOfScalar(u8, trimmed, ':') orelse continue;
                 status = std.mem.trim(u8, trimmed[colon_idx + 1 ..], " \t");
+            } else if (std.mem.startsWith(u8, trimmed, "parent:")) {
+                const colon_idx = std.mem.indexOfScalar(u8, trimmed, ':') orelse continue;
+                const value = std.mem.trim(u8, trimmed[colon_idx + 1 ..], " \t");
+                if (std.mem.indexOf(u8, value, "#")) |hash_idx| {
+                    parent = std.mem.trim(u8, value[0..hash_idx], " \t");
+                } else {
+                    parent = value;
+                }
             } else if (std.mem.startsWith(u8, trimmed, "deps:")) {
                 const colon_idx = std.mem.indexOfScalar(u8, trimmed, ':') orelse continue;
                 const value = std.mem.trim(u8, trimmed[colon_idx + 1 ..], " \t");
@@ -842,6 +1006,22 @@ fn parseTicket(allocator: std.mem.Allocator, file_path: []const u8) !TicketData 
                             const item_trimmed = std.mem.trim(u8, item, " \t");
                             if (item_trimmed.len > 0) {
                                 try deps.append(allocator, try allocator.dupe(u8, item_trimmed));
+                            }
+                        }
+                    }
+                }
+            } else if (std.mem.startsWith(u8, trimmed, "links:")) {
+                const colon_idx = std.mem.indexOfScalar(u8, trimmed, ':') orelse continue;
+                const value = std.mem.trim(u8, trimmed[colon_idx + 1 ..], " \t");
+                if (std.mem.startsWith(u8, value, "[") and std.mem.endsWith(u8, value, "]")) {
+                    const inner = value[1 .. value.len - 1];
+                    const inner_trimmed = std.mem.trim(u8, inner, " \t");
+                    if (inner_trimmed.len > 0) {
+                        var items = std.mem.splitScalar(u8, inner_trimmed, ',');
+                        while (items.next()) |item| {
+                            const item_trimmed = std.mem.trim(u8, item, " \t");
+                            if (item_trimmed.len > 0) {
+                                try links.append(allocator, try allocator.dupe(u8, item_trimmed));
                             }
                         }
                     }
@@ -860,6 +1040,8 @@ fn parseTicket(allocator: std.mem.Allocator, file_path: []const u8) !TicketData 
         .status = try allocator.dupe(u8, status),
         .title = try allocator.dupe(u8, title),
         .deps = try deps.toOwnedSlice(allocator),
+        .links = try links.toOwnedSlice(allocator),
+        .parent = try allocator.dupe(u8, parent),
         .allocator = allocator,
     };
 }
