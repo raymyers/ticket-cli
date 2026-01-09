@@ -100,11 +100,176 @@ fn printUsage() void {
 }
 
 fn handleCreate(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
-    _ = allocator;
-    _ = args;
-    const stdout = stdout_file;
-    try stdout.writeAll("Error: create command not yet implemented\n");
-    return 1;
+    try ensureTicketsDir();
+    
+    var title: ?[]const u8 = null;
+    var description: ?[]const u8 = null;
+    var design: ?[]const u8 = null;
+    var acceptance: ?[]const u8 = null;
+    var priority: i32 = 2;
+    var issue_type: []const u8 = "task";
+    var assignee: ?[]u8 = null;
+    var external_ref: ?[]const u8 = null;
+    var parent: ?[]const u8 = null;
+    
+    // Try to get git user.name as default assignee
+    assignee = try getGitUserName(allocator);
+    
+    // Parse command line arguments
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        
+        if (std.mem.eql(u8, arg, "-d") or std.mem.eql(u8, arg, "--description")) {
+            if (i + 1 >= args.len) {
+                try stderr_file.writeAll("Error: -d/--description requires an argument\n");
+                return 1;
+            }
+            i += 1;
+            description = args[i];
+        } else if (std.mem.eql(u8, arg, "--design")) {
+            if (i + 1 >= args.len) {
+                try stderr_file.writeAll("Error: --design requires an argument\n");
+                return 1;
+            }
+            i += 1;
+            design = args[i];
+        } else if (std.mem.eql(u8, arg, "--acceptance")) {
+            if (i + 1 >= args.len) {
+                try stderr_file.writeAll("Error: --acceptance requires an argument\n");
+                return 1;
+            }
+            i += 1;
+            acceptance = args[i];
+        } else if (std.mem.eql(u8, arg, "-p") or std.mem.eql(u8, arg, "--priority")) {
+            if (i + 1 >= args.len) {
+                try stderr_file.writeAll("Error: -p/--priority requires an argument\n");
+                return 1;
+            }
+            i += 1;
+            priority = try std.fmt.parseInt(i32, args[i], 10);
+        } else if (std.mem.eql(u8, arg, "-t") or std.mem.eql(u8, arg, "--type")) {
+            if (i + 1 >= args.len) {
+                try stderr_file.writeAll("Error: -t/--type requires an argument\n");
+                return 1;
+            }
+            i += 1;
+            issue_type = args[i];
+        } else if (std.mem.eql(u8, arg, "-a") or std.mem.eql(u8, arg, "--assignee")) {
+            if (i + 1 >= args.len) {
+                try stderr_file.writeAll("Error: -a/--assignee requires an argument\n");
+                return 1;
+            }
+            i += 1;
+            if (assignee) |old_assignee| {
+                allocator.free(old_assignee);
+            }
+            assignee = try allocator.dupe(u8, args[i]);
+        } else if (std.mem.eql(u8, arg, "--external-ref")) {
+            if (i + 1 >= args.len) {
+                try stderr_file.writeAll("Error: --external-ref requires an argument\n");
+                return 1;
+            }
+            i += 1;
+            external_ref = args[i];
+        } else if (std.mem.eql(u8, arg, "--parent")) {
+            if (i + 1 >= args.len) {
+                try stderr_file.writeAll("Error: --parent requires an argument\n");
+                return 1;
+            }
+            i += 1;
+            parent = args[i];
+        } else if (std.mem.startsWith(u8, arg, "-")) {
+            var buf: [256]u8 = undefined;
+            const msg = try std.fmt.bufPrint(&buf, "Unknown option: {s}\n", .{arg});
+            try stderr_file.writeAll(msg);
+            return 1;
+        } else {
+            title = arg;
+        }
+    }
+    
+    defer if (assignee) |a| allocator.free(a);
+    
+    const final_title = title orelse "Untitled";
+    const ticket_id = try generateTicketID(allocator);
+    defer allocator.free(ticket_id);
+    
+    const timestamp = try getCurrentTimestamp(allocator);
+    defer allocator.free(timestamp);
+    
+    // Build file path
+    var file_path_buf: [256]u8 = undefined;
+    const file_path = try std.fmt.bufPrint(&file_path_buf, "{s}/{s}.md", .{ tickets_dir, ticket_id });
+    
+    // Build content
+    var content: std.ArrayList(u8) = .empty;
+    defer content.deinit(allocator);
+    
+    try content.appendSlice(allocator, "---\n");
+    try content.appendSlice(allocator, "id: ");
+    try content.appendSlice(allocator, ticket_id);
+    try content.appendSlice(allocator, "\nstatus: open\n");
+    try content.appendSlice(allocator, "deps: []\n");
+    try content.appendSlice(allocator, "links: []\n");
+    try content.appendSlice(allocator, "created: ");
+    try content.appendSlice(allocator, timestamp);
+    try content.appendSlice(allocator, "\ntype: ");
+    try content.appendSlice(allocator, issue_type);
+    try content.appendSlice(allocator, "\npriority: ");
+    
+    var priority_buf: [16]u8 = undefined;
+    const priority_str = try std.fmt.bufPrint(&priority_buf, "{d}", .{priority});
+    try content.appendSlice(allocator, priority_str);
+    try content.appendSlice(allocator, "\n");
+    
+    if (assignee) |a| {
+        try content.appendSlice(allocator, "assignee: ");
+        try content.appendSlice(allocator, a);
+        try content.appendSlice(allocator, "\n");
+    }
+    
+    if (external_ref) |ref| {
+        try content.appendSlice(allocator, "external-ref: ");
+        try content.appendSlice(allocator, ref);
+        try content.appendSlice(allocator, "\n");
+    }
+    
+    if (parent) |p| {
+        try content.appendSlice(allocator, "parent: ");
+        try content.appendSlice(allocator, p);
+        try content.appendSlice(allocator, "\n");
+    }
+    
+    try content.appendSlice(allocator, "---\n# ");
+    try content.appendSlice(allocator, final_title);
+    try content.appendSlice(allocator, "\n\n");
+    
+    if (description) |desc| {
+        try content.appendSlice(allocator, desc);
+        try content.appendSlice(allocator, "\n\n");
+    }
+    
+    if (design) |des| {
+        try content.appendSlice(allocator, "## Design\n\n");
+        try content.appendSlice(allocator, des);
+        try content.appendSlice(allocator, "\n\n");
+    }
+    
+    if (acceptance) |acc| {
+        try content.appendSlice(allocator, "## Acceptance Criteria\n\n");
+        try content.appendSlice(allocator, acc);
+        try content.appendSlice(allocator, "\n\n");
+    }
+    
+    // Write file
+    try std.fs.cwd().writeFile(.{ .sub_path = file_path, .data = content.items });
+    
+    // Output ticket ID
+    try stdout_file.writeAll(ticket_id);
+    try stdout_file.writeAll("\n");
+    
+    return 0;
 }
 
 fn handleStatus(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
@@ -1054,6 +1219,78 @@ fn getCurrentTimestamp(allocator: std.mem.Allocator) ![]u8 {
         "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}Z",
         .{ year, month, day_of_month, hours, minutes, seconds }
     );
+}
+
+fn generateTicketID(allocator: std.mem.Allocator) ![]u8 {
+    const cwd = try std.fs.cwd().realpathAlloc(allocator, ".");
+    defer allocator.free(cwd);
+    
+    const dir_name = std.fs.path.basename(cwd);
+    
+    // Extract first letter of each hyphenated/underscored segment
+    var prefix: std.ArrayList(u8) = .empty;
+    defer prefix.deinit(allocator);
+    
+    var iter = std.mem.tokenizeAny(u8, dir_name, "-_");
+    while (iter.next()) |segment| {
+        if (segment.len > 0) {
+            try prefix.append(allocator, segment[0]);
+        }
+    }
+    
+    // Fallback to first 3 chars if no segments
+    const prefix_str = if (prefix.items.len > 0)
+        try allocator.dupe(u8, prefix.items)
+    else if (dir_name.len >= 3)
+        try allocator.dupe(u8, dir_name[0..3])
+    else
+        try allocator.dupe(u8, dir_name);
+    defer allocator.free(prefix_str);
+    
+    // Generate 4-char hash from timestamp + PID
+    const timestamp = std.time.timestamp();
+    const pid = std.c.getpid();
+    
+    var entropy_buf: [64]u8 = undefined;
+    const entropy = try std.fmt.bufPrint(&entropy_buf, "{d}{d}", .{ pid, timestamp });
+    
+    var hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(entropy, &hash, .{});
+    
+    var hash_str: [4]u8 = undefined;
+    _ = try std.fmt.bufPrint(&hash_str, "{x:0>4}", .{@as(u16, @intCast(hash[0])) << 8 | @as(u16, @intCast(hash[1]))});
+    
+    return try std.fmt.allocPrint(allocator, "{s}-{s}", .{ prefix_str, &hash_str });
+}
+
+fn ensureTicketsDir() !void {
+    std.fs.cwd().makeDir(tickets_dir) catch |err| {
+        if (err != error.PathAlreadyExists) {
+            return err;
+        }
+    };
+}
+
+fn getGitUserName(allocator: std.mem.Allocator) !?[]u8 {
+    const result = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{ "git", "config", "user.name" },
+    }) catch {
+        return null;
+    };
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+    
+    if (result.term.Exited != 0) {
+        return null;
+    }
+    
+    const trimmed = std.mem.trim(u8, result.stdout, " \t\n\r");
+    if (trimmed.len == 0) {
+        return null;
+    }
+    
+    return try allocator.dupe(u8, trimmed);
 }
 
 // Helper function to resolve ticket ID (exact or partial match)
