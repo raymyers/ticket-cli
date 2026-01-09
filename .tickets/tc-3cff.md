@@ -1,6 +1,6 @@
 ---
 id: tc-3cff
-status: open
+status: closed
 deps: [tc-55a8]
 links: []
 created: 2026-01-09T17:06:01Z
@@ -57,3 +57,21 @@ Then make each new ticket depend on this scoping ticket:
 3. Order tickets logically
 4. Document the ticket IDs created
 
+
+## Notes
+
+**2026-01-09T17:21:22Z**
+
+Created 10 tickets for porting BDD features to Go:
+1. tc-00c9: ticket_creation
+2. tc-35f6: ticket_show
+3. tc-3f5b: ticket_status
+4. tc-5d93: ticket_listing
+5. tc-32f8: ticket_notes
+6. tc-5668: ticket_edit
+7. tc-cd1e: ticket_dependencies
+8. tc-eff4: ticket_links
+9. tc-178a: ticket_query
+10. tc-c5a8: id_resolution
+
+All tickets have descriptions and dependencies set on tc-3cff.
