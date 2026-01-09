@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,6 +31,8 @@ func Run(args []string) int {
 		return cmdCreate(commandArgs)
 	case "query":
 		return cmdQuery(commandArgs)
+	case "add-note":
+		return cmdAddNote(commandArgs)
 	default:
 		fmt.Println("Ticket CLI - Go port (work in progress)")
 		fmt.Printf("Command not yet implemented: %s\n", command)
@@ -425,4 +428,85 @@ func parseTicket(filePath string) (map[string]interface{}, error) {
 	}
 
 	return ticket, nil
+}
+
+func resolveTicketID(ticketID string) (string, error) {
+	exactPath := filepath.Join(ticketsDir, ticketID+".md")
+	if _, err := os.Stat(exactPath); err == nil {
+		return exactPath, nil
+	}
+
+	pattern := filepath.Join(ticketsDir, "*"+ticketID+"*.md")
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return "", err
+	}
+
+	if len(matches) == 0 {
+		return "", fmt.Errorf("ticket '%s' not found", ticketID)
+	}
+	if len(matches) > 1 {
+		return "", fmt.Errorf("ambiguous ID '%s' matches multiple tickets", ticketID)
+	}
+
+	return matches[0], nil
+}
+
+func cmdAddNote(args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: ticket add-note <id> [note text]")
+		return 1
+	}
+
+	ticketID := args[0]
+
+	filePath, err := resolveTicketID(ticketID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+
+	targetID := strings.TrimSuffix(filepath.Base(filePath), ".md")
+
+	var note string
+	if len(args) > 1 {
+		note = strings.Join(args[1:], " ")
+	} else {
+		stat, _ := os.Stdin.Stat()
+		if (stat.Mode() & os.ModeCharDevice) == 0 {
+			data, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error reading stdin: %v\n", err)
+				return 1
+			}
+			note = strings.TrimSpace(string(data))
+		} else {
+			fmt.Fprintln(os.Stderr, "Error: no note provided")
+			return 1
+		}
+	}
+
+	timestamp := isoDate()
+
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading ticket: %v\n", err)
+		return 1
+	}
+
+	contentStr := string(content)
+
+	if !strings.Contains(contentStr, "## Notes") {
+		contentStr += "\n## Notes\n"
+	}
+
+	contentStr += fmt.Sprintf("\n**%s**\n\n%s\n", timestamp, note)
+
+	if err := os.WriteFile(filePath, []byte(contentStr), 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing ticket: %v\n", err)
+		return 1
+	}
+
+	fmt.Printf("Note added to %s\n", targetID)
+	return 0
 }
