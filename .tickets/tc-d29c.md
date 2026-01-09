@@ -1,6 +1,6 @@
 ---
 id: tc-d29c
-status: open
+status: closed
 deps: [tc-9c9c, tc-69a8]
 links: []
 created: 2026-01-09T13:13:43Z
@@ -24,3 +24,7 @@ Add this line to python/bdd.sh:
 # ...
 uv run --with behave behave features/ticket_dependencies.feature
 ```
+
+**2026-01-09T13:45:42Z**
+
+Implemented Python version of ticket_dependencies feature. Added cmd_dep, cmd_undep, and cmd_dep_tree functions. All BDD tests passing.

@@ -810,6 +810,189 @@ def cmd_unlink(args: list[str]) -> int:
     return 0
 
 
+def cmd_dep(args: list[str]) -> int:
+    """Add or manage dependencies between tickets."""
+    # Handle subcommands
+    if args and args[0] == "tree":
+        return cmd_dep_tree(args[1:])
+    
+    if len(args) < 2:
+        print("Usage: ticket dep <id> <dependency-id>", file=sys.stderr)
+        print("       ticket dep tree [--full] <id>  - show dependency tree", file=sys.stderr)
+        return 1
+    
+    ticket_id = args[0]
+    dep_id = args[1]
+    
+    # Resolve both ticket IDs
+    try:
+        file_path = ticket_path(ticket_id)
+        dep_path = ticket_path(dep_id)
+    except SystemExit:
+        return 1
+    
+    # Get actual IDs from file stems
+    actual_id = file_path.stem
+    actual_dep_id = dep_path.stem
+    
+    # Get current deps
+    ticket = parse_ticket(file_path)
+    existing_deps_str = ticket["frontmatter"].get("deps", "[]")
+    existing_deps = parse_list_field(existing_deps_str)
+    
+    # Check if dependency already exists
+    if actual_dep_id in existing_deps:
+        print("Dependency already exists")
+        return 0
+    
+    # Add new dependency
+    new_deps = existing_deps + [actual_dep_id]
+    new_deps_str = "[" + ", ".join(new_deps) + "]"
+    update_yaml_field(file_path, "deps", new_deps_str)
+    
+    print(f"Added dependency: {actual_id} -> {actual_dep_id}")
+    return 0
+
+
+def cmd_undep(args: list[str]) -> int:
+    """Remove a dependency between tickets."""
+    if len(args) < 2:
+        print("Usage: ticket undep <id> <dependency-id>", file=sys.stderr)
+        return 1
+    
+    ticket_id = args[0]
+    dep_id = args[1]
+    
+    # Resolve both ticket IDs
+    try:
+        file_path = ticket_path(ticket_id)
+        dep_path = ticket_path(dep_id)
+    except SystemExit:
+        return 1
+    
+    # Get actual IDs from file stems
+    actual_id = file_path.stem
+    actual_dep_id = dep_path.stem
+    
+    # Get current deps
+    ticket = parse_ticket(file_path)
+    existing_deps_str = ticket["frontmatter"].get("deps", "[]")
+    existing_deps = parse_list_field(existing_deps_str)
+    
+    # Check if dependency exists
+    if actual_dep_id not in existing_deps:
+        print("Dependency not found")
+        return 1
+    
+    # Remove dependency
+    new_deps = [dep for dep in existing_deps if dep != actual_dep_id]
+    new_deps_str = "[" + ", ".join(new_deps) + "]"
+    update_yaml_field(file_path, "deps", new_deps_str)
+    
+    print(f"Removed dependency: {actual_id} -/-> {actual_dep_id}")
+    return 0
+
+
+def cmd_dep_tree(args: list[str]) -> int:
+    """Show dependency tree for a ticket."""
+    full_mode = False
+    root_id = None
+    
+    # Parse arguments
+    for arg in args:
+        if arg == "--full":
+            full_mode = True
+        else:
+            root_id = arg
+    
+    if not root_id:
+        print("Usage: ticket dep tree [--full] <id>", file=sys.stderr)
+        return 1
+    
+    # Load all tickets
+    tickets = load_all_tickets()
+    
+    if not tickets:
+        print(f"Error: ticket {root_id} not found", file=sys.stderr)
+        return 1
+    
+    # Resolve partial ID
+    root = None
+    for ticket_id in tickets:
+        if root_id in ticket_id:
+            if root is not None:
+                print(f"Error: ambiguous ID {root_id}", file=sys.stderr)
+                return 1
+            root = ticket_id
+    
+    if root is None:
+        print(f"Error: ticket {root_id} not found", file=sys.stderr)
+        return 1
+    
+    # Build dependency info for all tickets
+    deps_map = {}
+    for ticket_id, ticket_data in tickets.items():
+        deps_str = ticket_data["frontmatter"].get("deps", "[]")
+        deps_list = parse_list_field(deps_str)
+        deps_map[ticket_id] = deps_list
+    
+    # Print tree recursively
+    printed = set()
+    
+    def print_tree(ticket_id: str, prefix: str = "", is_last: bool = True, path: set = None):
+        if path is None:
+            path = set()
+        
+        # Handle cycles
+        if ticket_id in path:
+            return
+        
+        # Skip if already printed in non-full mode
+        if not full_mode and ticket_id in printed:
+            return
+        
+        # Get ticket info
+        if ticket_id not in tickets:
+            return
+        
+        ticket_data = tickets[ticket_id]
+        status = ticket_data["frontmatter"].get("status", "open")
+        title = ticket_data["title"]
+        
+        # Print current ticket
+        if ticket_id == root:
+            print(f"{ticket_id} [{status}] {title}")
+        else:
+            connector = "└── " if is_last else "├── "
+            print(f"{prefix}{connector}{ticket_id} [{status}] {title}")
+        
+        printed.add(ticket_id)
+        
+        # Get dependencies
+        deps = deps_map.get(ticket_id, [])
+        
+        if deps:
+            # Update path for cycle detection
+            new_path = path | {ticket_id}
+            
+            # Update prefix for children
+            if ticket_id == root:
+                new_prefix = ""
+            else:
+                if is_last:
+                    new_prefix = prefix + "    "
+                else:
+                    new_prefix = prefix + "│   "
+            
+            # Print each dependency
+            for i, dep_id in enumerate(deps):
+                is_last_dep = (i == len(deps) - 1)
+                print_tree(dep_id, new_prefix, is_last_dep, new_path)
+    
+    print_tree(root)
+    return 0
+
+
 def main() -> int:
     """Main entry point for the ticket CLI."""
     args = sys.argv[1:]
@@ -849,6 +1032,10 @@ def main() -> int:
         return cmd_link(command_args)
     elif command == "unlink":
         return cmd_unlink(command_args)
+    elif command == "dep":
+        return cmd_dep(command_args)
+    elif command == "undep":
+        return cmd_undep(command_args)
 
     print("Ticket CLI - Python port (work in progress)")
     print(f"Command not yet implemented: {command}")
