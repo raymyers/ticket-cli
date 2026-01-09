@@ -1,6 +1,6 @@
 ---
 id: tc-3f5b
-status: open
+status: closed
 deps: [tc-3cff]
 links: []
 created: 2026-01-09T17:20:14Z
@@ -18,3 +18,9 @@ Add this line to go/bdd.sh:
 # Run ticket_status feature tests
 godog features/ticket_status.feature
 ```
+
+## Notes
+
+**2026-01-09T17:42:58Z**
+
+Implemented ticket_status functionality in Go. Added updateYAMLField helper function and cmdStatus, cmdStart, cmdClose, cmdReopen commands. All BDD tests pass.

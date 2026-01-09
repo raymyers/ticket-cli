@@ -35,6 +35,14 @@ func Run(args []string) int {
 		return cmdAddNote(commandArgs)
 	case "show":
 		return cmdShow(commandArgs)
+	case "status":
+		return cmdStatus(commandArgs)
+	case "start":
+		return cmdStart(commandArgs)
+	case "close":
+		return cmdClose(commandArgs)
+	case "reopen":
+		return cmdReopen(commandArgs)
 	default:
 		fmt.Println("Ticket CLI - Go port (work in progress)")
 		fmt.Printf("Command not yet implemented: %s\n", command)
@@ -859,4 +867,119 @@ func cmdShow(args []string) int {
 	}
 
 	return 0
+}
+
+func updateYAMLField(filePath, field, value string) error {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return err
+	}
+
+	lines := strings.Split(string(content), "\n")
+	updated := false
+	inFrontmatter := false
+	var resultLines []string
+
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "---" {
+			resultLines = append(resultLines, line)
+			if !inFrontmatter {
+				inFrontmatter = true
+			} else {
+				inFrontmatter = false
+			}
+			continue
+		}
+
+		if inFrontmatter && strings.HasPrefix(line, field+":") {
+			resultLines = append(resultLines, fmt.Sprintf("%s: %s", field, value))
+			updated = true
+		} else {
+			resultLines = append(resultLines, line)
+		}
+	}
+
+	if !updated {
+		var newLines []string
+		firstMarkerFound := false
+		for _, line := range resultLines {
+			newLines = append(newLines, line)
+			if !firstMarkerFound && strings.TrimSpace(line) == "---" {
+				firstMarkerFound = true
+				newLines = append(newLines, fmt.Sprintf("%s: %s", field, value))
+			}
+		}
+		resultLines = newLines
+	}
+
+	return os.WriteFile(filePath, []byte(strings.Join(resultLines, "\n")), 0644)
+}
+
+func cmdStatus(args []string) int {
+	validStatuses := []string{"open", "in_progress", "closed"}
+
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "Usage: ticket status <id> <status>")
+		fmt.Fprintf(os.Stderr, "Valid statuses: %s\n", strings.Join(validStatuses, " "))
+		return 1
+	}
+
+	ticketID := args[0]
+	status := args[1]
+
+	isValid := false
+	for _, validStatus := range validStatuses {
+		if status == validStatus {
+			isValid = true
+			break
+		}
+	}
+
+	if !isValid {
+		fmt.Fprintf(os.Stderr, "Error: invalid status '%s'. Must be one of: %s\n", status, strings.Join(validStatuses, " "))
+		return 1
+	}
+
+	filePath, err := resolveTicketID(ticketID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+
+	targetID := strings.TrimSuffix(filepath.Base(filePath), ".md")
+
+	if err := updateYAMLField(filePath, "status", status); err != nil {
+		fmt.Fprintf(os.Stderr, "Error updating ticket: %v\n", err)
+		return 1
+	}
+
+	fmt.Printf("Updated %s -> %s\n", targetID, status)
+	return 0
+}
+
+func cmdStart(args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: ticket start <id>")
+		return 1
+	}
+
+	return cmdStatus([]string{args[0], "in_progress"})
+}
+
+func cmdClose(args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: ticket close <id>")
+		return 1
+	}
+
+	return cmdStatus([]string{args[0], "closed"})
+}
+
+func cmdReopen(args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: ticket reopen <id>")
+		return 1
+	}
+
+	return cmdStatus([]string{args[0], "open"})
 }
