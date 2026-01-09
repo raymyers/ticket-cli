@@ -24,12 +24,17 @@ The port involves:
 
 Create tickets for all major phases of the port. Use the `./ticket` command to create and organize these tickets.
 
+Tickets are organized by priority (0=highest, 4=lowest):
+- **Priority 1**: Setup tasks that must be completed first
+- **Priority 2**: Core implementation work (tools, features)
+- **Priority 3**: Integration and validation tasks
+
 #### 1.1 Setup Ticket
 
-Create the initial setup ticket:
+Create the initial setup ticket with priority 1:
 
 ```bash
-./ticket create "Setup project for [LANGUAGE] port"
+./ticket create "Setup project for [LANGUAGE] port" --priority 1
 ```
 
 In the ticket description, specify:
@@ -40,14 +45,13 @@ In the ticket description, specify:
 
 #### 1.2 Development Tools Ticket
 
-Create a ticket for adding quality checks:
+Create a ticket for adding quality checks with priority 2:
 
 ```bash
-./ticket create "Lint / checks in [LANGUAGE] port"
+./ticket create "Lint / checks in [LANGUAGE] port" --priority 2
 ```
 
 This ticket should:
-- Depend on the setup ticket (use `./ticket dep <new-id> <setup-id>`)
 - Specify linting tools (e.g., ruff for Python, clippy for Rust, eslint for JS)
 - Specify type checking tools (e.g., mypy, TypeScript, go vet)
 - Specify testing framework (e.g., pytest, Jest, go test)
@@ -76,24 +80,23 @@ Example Makefile target structure:
 
 #### 1.3 BDD Features Scoping Ticket
 
-Create a ticket for organizing BDD feature ports:
+Create a ticket for organizing BDD feature ports with priority 2:
 
 ```bash
-./ticket create "Scope out BDD [LANGUAGE]"
+./ticket create "Scope out BDD [LANGUAGE]" --priority 2
 ```
 
 This ticket should:
 - Create one ticket per feature file in `features/`
 - Each feature ticket should include instructions for adding test commands to `[language]/bdd.sh`
-- Set up dependencies so feature tickets depend on this scoping ticket
-- Order feature tickets in logical implementation sequence
+- Order feature tickets in logical implementation sequence using priority
 
 The ticket description should include instructions like:
 
 ```
-For each feature in features/, create a ticket with:
+For each feature in features/, create a ticket with priority 2:
 
-./ticket create "Port feature <feature_name> to [LANGUAGE]"
+./ticket create "Port feature <feature_name> to [LANGUAGE]" --priority 2
 
 Add this to the ticket description:
 
@@ -103,10 +106,6 @@ Add this to the ticket description:
 # Run [feature_name] feature tests
 [test-runner] features/<feature_name>.feature
 ```
-
-Then make each new ticket depend on this scoping ticket:
-
-./ticket dep <new-ticket-id> <this-ticket-id>
 ```
 
 The features to port (as of this writing):
@@ -135,14 +134,13 @@ Recommended implementation order:
 
 #### 1.4 Full BDD Suite Integration Ticket
 
-Create a ticket for integrating all BDD tests:
+Create a ticket for integrating all BDD tests with priority 3:
 
 ```bash
-./ticket create "Add full BDD suite to [LANGUAGE] build"
+./ticket create "Add full BDD suite to [LANGUAGE] build" --priority 3
 ```
 
 This ticket should:
-- Depend on ALL feature port tickets
 - Update `[language]/bdd.sh` to run the complete test suite
 - Add a `[language]-bdd` target to the root Makefile
 - Ensure the BDD suite can be run as part of CI/CD
@@ -167,14 +165,13 @@ export TICKET_SCRIPT="${PROJECT_ROOT}/[lang]_ticket.sh"
 
 #### 1.5 Manual Smoke Test Ticket
 
-Create a ticket for manual validation:
+Create a ticket for manual validation with priority 3:
 
 ```bash
-./ticket create "Manual smoke test of [LANGUAGE] port"
+./ticket create "Manual smoke test of [LANGUAGE] port" --priority 3
 ```
 
 This ticket should:
-- Depend on the full BDD suite ticket
 - Test the implementation in a fresh directory
 - Cover basic real-world use cases:
   - Creating tickets
@@ -187,15 +184,13 @@ This ticket should:
 
 #### 1.6 Spec Review Ticket
 
-Create a ticket for comparing against the specification:
+Create a ticket for comparing against the specification with priority 3:
 
 ```bash
-./ticket create "Spec review vs [LANGUAGE] implementation"
+./ticket create "Spec review vs [LANGUAGE] implementation" --priority 3
 ```
 
 This ticket should:
-- Depend on the full BDD suite ticket
-- Depend on the manual smoke test ticket
 - Compare the implementation against docs/SPEC.md
 - Document findings in docs/SPEC_REVIEW_[LANGUAGE].md
 
@@ -246,12 +241,10 @@ When implementing the development tools ticket:
 
 When implementing the scoping ticket:
 
-1. Create one ticket per feature file
-2. Set appropriate dependencies
-3. Add detailed instructions to each ticket
-4. Order tickets logically
-5. Add notes summarizing the tickets created
-6. Close the scoping ticket
+1. Create one ticket per feature file with priority 2
+2. Add detailed instructions to each ticket
+3. Add notes summarizing the tickets created
+4. Close the scoping ticket
 
 ### Step 5: Execute Feature Port Tickets
 
