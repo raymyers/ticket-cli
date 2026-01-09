@@ -531,6 +531,164 @@ def cmd_reopen(args: list[str]) -> int:
     return cmd_status([args[0], "open"])
 
 
+def cmd_ls(args: list[str]) -> int:
+    """List tickets with optional status filter."""
+    tickets_dir = Path(TICKETS_DIR)
+    if not tickets_dir.exists():
+        return 0
+    
+    status_filter = ""
+    for arg in args:
+        if arg.startswith("--status="):
+            status_filter = arg.split("=", 1)[1]
+    
+    all_tickets = load_all_tickets()
+    
+    for ticket_id in sorted(all_tickets.keys()):
+        ticket = all_tickets[ticket_id]
+        status = ticket["frontmatter"].get("status", "open")
+        
+        if status_filter and status != status_filter:
+            continue
+        
+        title = ticket["title"]
+        deps_str = ticket["frontmatter"].get("deps", "[]")
+        deps = parse_list_field(deps_str)
+        
+        dep_display = ""
+        if deps:
+            dep_display = f" <- [{', '.join(deps)}]"
+        
+        print(f"{ticket_id:<8} [{status}] - {title}{dep_display}")
+    
+    return 0
+
+
+def cmd_ready(args: list[str]) -> int:
+    """List open/in_progress tickets with all dependencies resolved."""
+    tickets_dir = Path(TICKETS_DIR)
+    if not tickets_dir.exists():
+        return 0
+    
+    all_tickets = load_all_tickets()
+    ready_tickets = []
+    
+    for ticket_id, ticket in all_tickets.items():
+        status = ticket["frontmatter"].get("status", "open")
+        
+        if status not in ("open", "in_progress"):
+            continue
+        
+        deps_str = ticket["frontmatter"].get("deps", "[]")
+        deps = parse_list_field(deps_str)
+        
+        # Check if all dependencies are closed
+        ready = True
+        for dep_id in deps:
+            if dep_id in all_tickets:
+                dep_status = all_tickets[dep_id]["frontmatter"].get("status", "open")
+                if dep_status != "closed":
+                    ready = False
+                    break
+            else:
+                # If dependency doesn't exist, consider ticket as not ready
+                ready = False
+                break
+        
+        if ready:
+            priority = ticket["frontmatter"].get("priority", "2")
+            title = ticket["title"]
+            ready_tickets.append((int(priority), ticket_id, status, title))
+    
+    # Sort by priority, then by id
+    ready_tickets.sort(key=lambda x: (x[0], x[1]))
+    
+    for priority, ticket_id, status, title in ready_tickets:
+        print(f"{ticket_id:<8} [P{priority}][{status}] - {title}")
+    
+    return 0
+
+
+def cmd_blocked(args: list[str]) -> int:
+    """List open/in_progress tickets with unresolved dependencies."""
+    tickets_dir = Path(TICKETS_DIR)
+    if not tickets_dir.exists():
+        return 0
+    
+    all_tickets = load_all_tickets()
+    blocked_tickets = []
+    
+    for ticket_id, ticket in all_tickets.items():
+        status = ticket["frontmatter"].get("status", "open")
+        
+        if status not in ("open", "in_progress"):
+            continue
+        
+        deps_str = ticket["frontmatter"].get("deps", "[]")
+        deps = parse_list_field(deps_str)
+        
+        if not deps:
+            continue
+        
+        # Find unclosed blockers
+        unclosed_blockers = []
+        for dep_id in deps:
+            if dep_id in all_tickets:
+                dep_status = all_tickets[dep_id]["frontmatter"].get("status", "open")
+                if dep_status != "closed":
+                    unclosed_blockers.append(dep_id)
+            else:
+                # If dependency doesn't exist, consider it blocking
+                unclosed_blockers.append(dep_id)
+        
+        if unclosed_blockers:
+            priority = ticket["frontmatter"].get("priority", "2")
+            title = ticket["title"]
+            blocked_tickets.append((int(priority), ticket_id, status, title, unclosed_blockers))
+    
+    # Sort by priority, then by id
+    blocked_tickets.sort(key=lambda x: (x[0], x[1]))
+    
+    for priority, ticket_id, status, title, blockers in blocked_tickets:
+        blockers_str = ", ".join(blockers)
+        print(f"{ticket_id:<8} [P{priority}][{status}] - {title} <- [{blockers_str}]")
+    
+    return 0
+
+
+def cmd_closed(args: list[str]) -> int:
+    """List recently closed tickets."""
+    tickets_dir = Path(TICKETS_DIR)
+    if not tickets_dir.exists():
+        return 0
+    
+    limit = 20
+    for arg in args:
+        if arg.startswith("--limit="):
+            limit = int(arg.split("=", 1)[1])
+    
+    # Get all ticket files sorted by modification time (most recent first)
+    ticket_files = sorted(tickets_dir.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+    
+    closed_tickets = []
+    for ticket_file in ticket_files[:100]:  # Check up to 100 most recently modified files
+        ticket = parse_ticket(ticket_file)
+        status = ticket["frontmatter"].get("status", "open")
+        
+        if status in ("closed", "done"):
+            ticket_id = ticket["frontmatter"].get("id", "")
+            title = ticket["title"]
+            closed_tickets.append((ticket_id, status, title))
+            
+            if len(closed_tickets) >= limit:
+                break
+    
+    for ticket_id, status, title in closed_tickets:
+        print(f"{ticket_id:<8} [{status}] - {title}")
+    
+    return 0
+
+
 def main() -> int:
     """Main entry point for the ticket CLI."""
     args = sys.argv[1:]
@@ -556,6 +714,14 @@ def main() -> int:
         return cmd_close(command_args)
     elif command == "reopen":
         return cmd_reopen(command_args)
+    elif command == "ls":
+        return cmd_ls(command_args)
+    elif command == "ready":
+        return cmd_ready(command_args)
+    elif command == "blocked":
+        return cmd_blocked(command_args)
+    elif command == "closed":
+        return cmd_closed(command_args)
 
     print("Ticket CLI - Python port (work in progress)")
     print(f"Command not yet implemented: {command}")

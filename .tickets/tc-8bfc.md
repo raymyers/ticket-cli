@@ -1,6 +1,6 @@
 ---
 id: tc-8bfc
-status: open
+status: closed
 deps: [tc-9c9c, tc-98c7]
 links: []
 created: 2026-01-09T13:13:37Z
@@ -24,3 +24,7 @@ Add this line to python/bdd.sh:
 # ...
 uv run --with behave behave features/ticket_listing.feature
 ```
+
+**2026-01-09T13:36:58Z**
+
+Implemented Python versions of ticket listing commands (ls, ready, blocked, closed). Added test to python/bdd.sh. All 18 scenarios passing.
