@@ -1,8 +1,17 @@
 package cli
 
 import (
+	"crypto/sha256"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
 )
+
+const ticketsDir = ".tickets"
 
 // Run executes the CLI with the given arguments and returns an exit code.
 func Run(args []string) int {
@@ -49,8 +58,8 @@ Commands:
   link <id> <id> [id...]   Link tickets together (symmetric)
   unlink <id> <target-id>  Remove link between tickets
   ls [--status=X]          List tickets
-  ready                    List open/in-progress tickets with deps resolved
-  blocked                  List open/in-progress tickets with unresolved deps
+  ready                    List open/in_progress tickets with deps resolved
+  blocked                  List open/in_progress tickets with unresolved deps
   closed [--limit=N]       List recently closed tickets (default 20, by mtime)
   show <id>                Display ticket
   edit <id>                Open ticket in $EDITOR
@@ -63,7 +72,208 @@ Supports partial ID matching (e.g., 'tk show 5c4' matches 'nw-5c46')
 `)
 }
 
+func generateID() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "ticket"
+	}
+
+	dirName := filepath.Base(cwd)
+
+	// Extract first letter of each hyphenated/underscored segment
+	segments := strings.FieldsFunc(dirName, func(r rune) bool {
+		return r == '-' || r == '_'
+	})
+
+	var prefix string
+	for _, s := range segments {
+		if len(s) > 0 {
+			prefix += string(s[0])
+		}
+	}
+
+	// Fallback to first 3 chars if no segments
+	if prefix == "" {
+		if len(dirName) >= 3 {
+			prefix = dirName[:3]
+		} else {
+			prefix = dirName
+		}
+	}
+
+	// 4-char hash from timestamp + PID for entropy
+	entropy := fmt.Sprintf("%d%d", os.Getpid(), time.Now().UTC().Unix())
+	hash := sha256.Sum256([]byte(entropy))
+	hashStr := fmt.Sprintf("%x", hash)[:4]
+
+	return fmt.Sprintf("%s-%s", prefix, hashStr)
+}
+
+func isoDate() string {
+	return time.Now().UTC().Format("2006-01-02T15:04:05Z")
+}
+
+func ensureDir() error {
+	return os.MkdirAll(ticketsDir, 0755)
+}
+
+func getGitUserName() string {
+	cmd := exec.Command("git", "config", "user.name")
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(output))
+}
+
 func cmdCreate(args []string) int {
-	fmt.Println("tc-stub")
+	if err := ensureDir(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating tickets directory: %v\n", err)
+		return 1
+	}
+
+	title := ""
+	description := ""
+	design := ""
+	acceptance := ""
+	priority := 2
+	issueType := "task"
+	assignee := getGitUserName()
+	externalRef := ""
+	parent := ""
+
+	// Parse args
+	i := 0
+	for i < len(args) {
+		arg := args[i]
+
+		if arg == "-d" || arg == "--description" {
+			if i+1 >= len(args) {
+				fmt.Fprintf(os.Stderr, "Error: %s requires an argument\n", arg)
+				return 1
+			}
+			description = args[i+1]
+			i += 2
+		} else if arg == "--design" {
+			if i+1 >= len(args) {
+				fmt.Fprintf(os.Stderr, "Error: %s requires an argument\n", arg)
+				return 1
+			}
+			design = args[i+1]
+			i += 2
+		} else if arg == "--acceptance" {
+			if i+1 >= len(args) {
+				fmt.Fprintf(os.Stderr, "Error: %s requires an argument\n", arg)
+				return 1
+			}
+			acceptance = args[i+1]
+			i += 2
+		} else if arg == "-p" || arg == "--priority" {
+			if i+1 >= len(args) {
+				fmt.Fprintf(os.Stderr, "Error: %s requires an argument\n", arg)
+				return 1
+			}
+			p, err := strconv.Atoi(args[i+1])
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: invalid priority value: %s\n", args[i+1])
+				return 1
+			}
+			priority = p
+			i += 2
+		} else if arg == "-t" || arg == "--type" {
+			if i+1 >= len(args) {
+				fmt.Fprintf(os.Stderr, "Error: %s requires an argument\n", arg)
+				return 1
+			}
+			issueType = args[i+1]
+			i += 2
+		} else if arg == "-a" || arg == "--assignee" {
+			if i+1 >= len(args) {
+				fmt.Fprintf(os.Stderr, "Error: %s requires an argument\n", arg)
+				return 1
+			}
+			assignee = args[i+1]
+			i += 2
+		} else if arg == "--external-ref" {
+			if i+1 >= len(args) {
+				fmt.Fprintf(os.Stderr, "Error: %s requires an argument\n", arg)
+				return 1
+			}
+			externalRef = args[i+1]
+			i += 2
+		} else if arg == "--parent" {
+			if i+1 >= len(args) {
+				fmt.Fprintf(os.Stderr, "Error: %s requires an argument\n", arg)
+				return 1
+			}
+			parent = args[i+1]
+			i += 2
+		} else if strings.HasPrefix(arg, "-") {
+			fmt.Fprintf(os.Stderr, "Unknown option: %s\n", arg)
+			return 1
+		} else {
+			title = arg
+			i++
+		}
+	}
+
+	if title == "" {
+		title = "Untitled"
+	}
+
+	ticketID := generateID()
+	filePath := filepath.Join(ticketsDir, ticketID+".md")
+	now := isoDate()
+
+	// Build content
+	var contentParts []string
+	contentParts = append(contentParts, "---")
+	contentParts = append(contentParts, fmt.Sprintf("id: %s", ticketID))
+	contentParts = append(contentParts, "status: open")
+	contentParts = append(contentParts, "deps: []")
+	contentParts = append(contentParts, "links: []")
+	contentParts = append(contentParts, fmt.Sprintf("created: %s", now))
+	contentParts = append(contentParts, fmt.Sprintf("type: %s", issueType))
+	contentParts = append(contentParts, fmt.Sprintf("priority: %d", priority))
+	if assignee != "" {
+		contentParts = append(contentParts, fmt.Sprintf("assignee: %s", assignee))
+	}
+	if externalRef != "" {
+		contentParts = append(contentParts, fmt.Sprintf("external-ref: %s", externalRef))
+	}
+	if parent != "" {
+		contentParts = append(contentParts, fmt.Sprintf("parent: %s", parent))
+	}
+	contentParts = append(contentParts, "---")
+	contentParts = append(contentParts, fmt.Sprintf("# %s", title))
+	contentParts = append(contentParts, "")
+
+	if description != "" {
+		contentParts = append(contentParts, description)
+		contentParts = append(contentParts, "")
+	}
+
+	if design != "" {
+		contentParts = append(contentParts, "## Design")
+		contentParts = append(contentParts, "")
+		contentParts = append(contentParts, design)
+		contentParts = append(contentParts, "")
+	}
+
+	if acceptance != "" {
+		contentParts = append(contentParts, "## Acceptance Criteria")
+		contentParts = append(contentParts, "")
+		contentParts = append(contentParts, acceptance)
+		contentParts = append(contentParts, "")
+	}
+
+	content := strings.Join(contentParts, "\n")
+
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing ticket file: %v\n", err)
+		return 1
+	}
+
+	fmt.Println(ticketID)
 	return 0
 }
