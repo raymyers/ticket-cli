@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -45,6 +46,14 @@ func Run(args []string) int {
 		return cmdReopen(commandArgs)
 	case "edit":
 		return cmdEdit(commandArgs)
+	case "ls":
+		return cmdLs(commandArgs)
+	case "ready":
+		return cmdReady(commandArgs)
+	case "blocked":
+		return cmdBlocked(commandArgs)
+	case "closed":
+		return cmdClosed(commandArgs)
 	default:
 		fmt.Println("Ticket CLI - Go port (work in progress)")
 		fmt.Printf("Command not yet implemented: %s\n", command)
@@ -1021,6 +1030,281 @@ func cmdEdit(args []string) int {
 	} else {
 		// Non-TTY mode: just print the file path
 		fmt.Printf("Edit ticket file: %s\n", filePath)
+	}
+
+	return 0
+}
+
+func cmdLs(args []string) int {
+	if _, err := os.Stat(ticketsDir); os.IsNotExist(err) {
+		return 0
+	}
+
+	statusFilter := ""
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "--status=") {
+			statusFilter = strings.TrimPrefix(arg, "--status=")
+		}
+	}
+
+	allTickets, err := loadAllTickets()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading tickets: %v\n", err)
+		return 1
+	}
+
+	var ticketIDs []string
+	for id := range allTickets {
+		ticketIDs = append(ticketIDs, id)
+	}
+	sort.Strings(ticketIDs)
+
+	for _, ticketID := range ticketIDs {
+		ticket := allTickets[ticketID]
+		status := "open"
+		if s, ok := ticket.Frontmatter["status"].(string); ok {
+			status = s
+		}
+
+		if statusFilter != "" && status != statusFilter {
+			continue
+		}
+
+		title := ticket.Title
+		deps := parseListField(ticket.Frontmatter["deps"])
+
+		depDisplay := ""
+		if len(deps) > 0 {
+			depDisplay = fmt.Sprintf(" <- [%s]", strings.Join(deps, ", "))
+		}
+
+		fmt.Printf("%-8s [%s] - %s%s\n", ticketID, status, title, depDisplay)
+	}
+
+	return 0
+}
+
+func cmdReady(args []string) int {
+	if _, err := os.Stat(ticketsDir); os.IsNotExist(err) {
+		return 0
+	}
+
+	allTickets, err := loadAllTickets()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading tickets: %v\n", err)
+		return 1
+	}
+
+	type readyTicket struct {
+		priority int
+		id       string
+		status   string
+		title    string
+	}
+
+	var readyTickets []readyTicket
+
+	for ticketID, ticket := range allTickets {
+		status := "open"
+		if s, ok := ticket.Frontmatter["status"].(string); ok {
+			status = s
+		}
+
+		if status != "open" && status != "in_progress" {
+			continue
+		}
+
+		deps := parseListField(ticket.Frontmatter["deps"])
+
+		ready := true
+		for _, depID := range deps {
+			if depTicket, ok := allTickets[depID]; ok {
+				depStatus := "open"
+				if s, ok := depTicket.Frontmatter["status"].(string); ok {
+					depStatus = s
+				}
+				if depStatus != "closed" {
+					ready = false
+					break
+				}
+			} else {
+				ready = false
+				break
+			}
+		}
+
+		if ready {
+			priority := 2
+			if p, ok := ticket.Frontmatter["priority"].(int); ok {
+				priority = p
+			}
+			title := ticket.Title
+			readyTickets = append(readyTickets, readyTicket{priority, ticketID, status, title})
+		}
+	}
+
+	sort.Slice(readyTickets, func(i, j int) bool {
+		if readyTickets[i].priority != readyTickets[j].priority {
+			return readyTickets[i].priority < readyTickets[j].priority
+		}
+		return readyTickets[i].id < readyTickets[j].id
+	})
+
+	for _, rt := range readyTickets {
+		fmt.Printf("%-8s [P%d][%s] - %s\n", rt.id, rt.priority, rt.status, rt.title)
+	}
+
+	return 0
+}
+
+func cmdBlocked(args []string) int {
+	if _, err := os.Stat(ticketsDir); os.IsNotExist(err) {
+		return 0
+	}
+
+	allTickets, err := loadAllTickets()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading tickets: %v\n", err)
+		return 1
+	}
+
+	type blockedTicket struct {
+		priority int
+		id       string
+		status   string
+		title    string
+		blockers []string
+	}
+
+	var blockedTickets []blockedTicket
+
+	for ticketID, ticket := range allTickets {
+		status := "open"
+		if s, ok := ticket.Frontmatter["status"].(string); ok {
+			status = s
+		}
+
+		if status != "open" && status != "in_progress" {
+			continue
+		}
+
+		deps := parseListField(ticket.Frontmatter["deps"])
+
+		if len(deps) == 0 {
+			continue
+		}
+
+		var unclosedBlockers []string
+		for _, depID := range deps {
+			if depTicket, ok := allTickets[depID]; ok {
+				depStatus := "open"
+				if s, ok := depTicket.Frontmatter["status"].(string); ok {
+					depStatus = s
+				}
+				if depStatus != "closed" {
+					unclosedBlockers = append(unclosedBlockers, depID)
+				}
+			} else {
+				unclosedBlockers = append(unclosedBlockers, depID)
+			}
+		}
+
+		if len(unclosedBlockers) > 0 {
+			priority := 2
+			if p, ok := ticket.Frontmatter["priority"].(int); ok {
+				priority = p
+			}
+			title := ticket.Title
+			blockedTickets = append(blockedTickets, blockedTicket{priority, ticketID, status, title, unclosedBlockers})
+		}
+	}
+
+	sort.Slice(blockedTickets, func(i, j int) bool {
+		if blockedTickets[i].priority != blockedTickets[j].priority {
+			return blockedTickets[i].priority < blockedTickets[j].priority
+		}
+		return blockedTickets[i].id < blockedTickets[j].id
+	})
+
+	for _, bt := range blockedTickets {
+		blockersStr := strings.Join(bt.blockers, ", ")
+		fmt.Printf("%-8s [P%d][%s] - %s <- [%s]\n", bt.id, bt.priority, bt.status, bt.title, blockersStr)
+	}
+
+	return 0
+}
+
+func cmdClosed(args []string) int {
+	if _, err := os.Stat(ticketsDir); os.IsNotExist(err) {
+		return 0
+	}
+
+	limit := 20
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "--limit=") {
+			l, err := strconv.Atoi(strings.TrimPrefix(arg, "--limit="))
+			if err == nil {
+				limit = l
+			}
+		}
+	}
+
+	files, err := filepath.Glob(filepath.Join(ticketsDir, "*.md"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error listing tickets: %v\n", err)
+		return 1
+	}
+
+	type fileWithTime struct {
+		path  string
+		mtime time.Time
+	}
+
+	var filesWithTime []fileWithTime
+	for _, file := range files {
+		info, err := os.Stat(file)
+		if err != nil {
+			continue
+		}
+		filesWithTime = append(filesWithTime, fileWithTime{file, info.ModTime()})
+	}
+
+	sort.Slice(filesWithTime, func(i, j int) bool {
+		return filesWithTime[i].mtime.After(filesWithTime[j].mtime)
+	})
+
+	var closedTickets []struct {
+		id     string
+		status string
+		title  string
+	}
+
+	for i := 0; i < len(filesWithTime) && i < 100; i++ {
+		ticket, err := parseTicketFull(filesWithTime[i].path)
+		if err != nil {
+			continue
+		}
+
+		status := "open"
+		if s, ok := ticket.Frontmatter["status"].(string); ok {
+			status = s
+		}
+
+		if status == "closed" || status == "done" {
+			closedTickets = append(closedTickets, struct {
+				id     string
+				status string
+				title  string
+			}{ticket.ID, status, ticket.Title})
+
+			if len(closedTickets) >= limit {
+				break
+			}
+		}
+	}
+
+	for _, ct := range closedTickets {
+		fmt.Printf("%-8s [%s] - %s\n", ct.id, ct.status, ct.title)
 	}
 
 	return 0
