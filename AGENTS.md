@@ -15,6 +15,22 @@ Key functions:
 
 Dependencies: bash, sed, awk, find. Optional: ripgrep (faster grep), jq (for query command).
 
+## Behavior Driven Development
+
+We use executable specifications using the Cucumber-like library Behave
+
+To run the tests:
+  uv run --with behave behave
+
+  Or to run a specific feature:
+  uv run --with behave behave features/ticket_creation.feature
+
+Behave Tutorial
+https://raw.githubusercontent.com/behave/behave/refs/heads/main/docs/tutorial.rst
+
+If needed, full syntax reference here 
+https://raw.githubusercontent.com/behave/behave/refs/heads/main/docs/gherkin.rst
+
 ## Changelog
 
 When committing notable changes to the `ticket` script (new commands, flags, bug fixes, behavior changes), update CHANGELOG.md in the same commit:
