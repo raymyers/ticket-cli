@@ -516,3 +516,24 @@ def step_jsonl_deps_is_array(context):
                     f"deps field is not an array: {type(data['deps'])}"
                 return
     raise AssertionError("No JSONL line with deps field found")
+
+
+@then(r'the dep tree output should have (?P<first_id>[^\s]+) before (?P<second_id>[^\s]+)')
+def step_dep_tree_order(context, first_id, second_id):
+    """Assert that first_id appears before second_id in dep tree output."""
+    output = context.stdout
+    lines = output.split('\n')
+    
+    first_line = -1
+    second_line = -1
+    
+    for i, line in enumerate(lines):
+        if first_id in line:
+            first_line = i
+        if second_id in line:
+            second_line = i
+    
+    assert first_line != -1, f"'{first_id}' not found in output:\n{output}"
+    assert second_line != -1, f"'{second_id}' not found in output:\n{output}"
+    assert first_line < second_line, \
+        f"Expected '{first_id}' (line {first_line + 1}) before '{second_id}' (line {second_line + 1})\nOutput:\n{output}"
