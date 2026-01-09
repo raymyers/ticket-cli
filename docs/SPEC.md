@@ -6,7 +6,7 @@ A minimal ticket tracking system with dependency management. Tickets are stored 
 
 - Directory: `.tickets/`
 - Format: `{id}.md` (markdown with YAML frontmatter)
-- Filesystem resets between sessions; directory created on demand
+- Directory created on demand if it doesn't exist
 
 ## Ticket ID Generation
 
@@ -52,6 +52,8 @@ Note content (appended by add-note)
 ### create [title] [options]
 Create ticket, returns ID.
 
+If no title provided, defaults to "Untitled".
+
 | Option | Description |
 |--------|-------------|
 | `-d, --description` | Description text |
@@ -76,14 +78,14 @@ Alias for `status <id> closed`.
 Alias for `status <id> open`.
 
 ### dep \<id\> \<dep-id\>
-Add dependency: `id` depends on `dep-id`. Idempotent.
+Add dependency: `id` depends on `dep-id`. Idempotent (prints "Dependency already exists" if already present).
 
 ### dep tree [--full] \<id\>
 Display dependency tree rooted at `id`.
 
 - Default: each ticket appears once at its deepest level
 - `--full`: show all occurrences (cycles detected and skipped)
-- Sort children by subtree depth (shallowest first), then by ID
+- Sort children by subtree depth (shallowest first), then by ID (ascending)
 - Output format:
   ```
   root-id [status] Title
@@ -98,6 +100,8 @@ Remove dependency.
 ### link \<id\> \<id\> [id...]
 Create symmetric links between 2+ tickets. Bidirectional and idempotent.
 
+Outputs: "Added N link(s) between M tickets" where N is the count of new link entries added across all files, or "All links already exist" if no changes made.
+
 ### unlink \<id\> \<target-id\>
 Remove symmetric link between two tickets.
 
@@ -105,27 +109,32 @@ Remove symmetric link between two tickets.
 List all tickets. Optional status filter.
 
 Output: `{id} [{status}] - {title} <- [{deps}]`
+- ID is left-padded to 8 characters
+- Dependencies section (` <- [{deps}]`) only shown if ticket has dependencies
+- Dependency arrays formatted with spaces: `[a, b, c]`
 
 ### ready
 List tickets where:
 - Status is `open` or `in_progress`
 - All dependencies are `closed`
 
-Sorted by priority (ascending), then ID.
+Sorted by priority (ascending), then ID (ascending).
 
 Output: `{id} [P{priority}][{status}] - {title}`
 
 ### blocked
 List tickets where:
-- Status is `open` or `in_progress`  
+- Status is `open` or `in_progress`
 - At least one dependency is not `closed`
 
-Shows only unclosed blockers.
+Shows only unclosed blockers. Sorted by priority (ascending), then ID (ascending).
 
 Output: `{id} [P{priority}][{status}] - {title} <- [{unclosed deps}]`
 
 ### closed [--limit=N]
 List closed tickets, most recently modified first. Default limit: 20.
+
+Implementation: Examines the 100 most recently modified ticket files, filters for closed status, then applies the limit.
 
 ### show \<id\>
 Display full ticket with computed sections:
@@ -135,10 +144,10 @@ Display full ticket with computed sections:
 - **Children**: tickets with `parent: {id}`
 - **Linked**: tickets in `links` array
 
-Parent field shows title as comment: `parent: abc-1234  # Parent Title`
+In the output (not the file itself), parent field enhanced with title comment: `parent: abc-1234  # Parent Title`
 
 ### edit \<id\>
-Open ticket in `$EDITOR` (default: vi). Non-interactive if not TTY.
+Open ticket in `$EDITOR` (default: vi). If not a TTY, prints file path to stdout instead of opening editor.
 
 ### add-note \<id\> [text]
 Append timestamped note. Text from argument or stdin.
@@ -157,6 +166,7 @@ Output tickets as JSON Lines, one object per ticket.
 
 - Arrays serialized as JSON arrays
 - Optional jq filter: `query '.status == "open"'`
+- Requires: `jq` (for filtering)
 
 ### migrate-beads
 Import from `.beads/issues.jsonl` format.
@@ -165,6 +175,8 @@ Dependency type mapping:
 - `blocks` → `deps`
 - `parent-child` → `parent`
 - `related` → `links`
+
+Requires: `jq`
 
 ## ID Resolution
 
@@ -182,6 +194,10 @@ Extract value between `---` markers, match `^{field}:`, strip prefix.
 ### Update field
 - If exists: replace entire line
 - If missing: insert after first `---` line
+
+### Formatting Conventions
+- Array fields formatted with spaces after commas: `[a, b, c]`
+- Leading/trailing whitespace in field values stripped when reading
 
 ## Dependency Cycle Handling
 
