@@ -689,6 +689,30 @@ def cmd_closed(args: list[str]) -> int:
     return 0
 
 
+def cmd_edit(args: list[str]) -> int:
+    """Edit a ticket in the user's editor."""
+    if not args:
+        print("Usage: ticket edit <id>", file=sys.stderr)
+        return 1
+    
+    ticket_id = args[0]
+    file_path = ticket_path(ticket_id)
+    
+    # Check if we're in an interactive terminal
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        # Open in editor
+        editor = os.environ.get("EDITOR", "vi")
+        try:
+            subprocess.run([editor, str(file_path)], check=True)
+        except subprocess.CalledProcessError:
+            return 1
+    else:
+        # Non-TTY mode: just print the file path
+        print(f"Edit ticket file: {file_path}")
+    
+    return 0
+
+
 def main() -> int:
     """Main entry point for the ticket CLI."""
     args = sys.argv[1:]
@@ -722,6 +746,8 @@ def main() -> int:
         return cmd_blocked(command_args)
     elif command == "closed":
         return cmd_closed(command_args)
+    elif command == "edit":
+        return cmd_edit(command_args)
 
     print("Ticket CLI - Python port (work in progress)")
     print(f"Command not yet implemented: {command}")
