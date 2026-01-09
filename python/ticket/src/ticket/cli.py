@@ -6,11 +6,11 @@ import sys
 def main() -> int:
     """Main entry point for the ticket CLI."""
     args = sys.argv[1:]
-    
+
     if not args or args[0] in ("-h", "--help", "help"):
         print_help()
         return 0
-    
+
     print("Ticket CLI - Python port (work in progress)")
     print(f"Command not yet implemented: {args[0]}")
     return 1
