@@ -1,6 +1,6 @@
 .PHONY: python python-lint python-format python-type python-test python-check
 .PHONY: go go-lint go-type go-fmt go-test go-bdd go-check
-.PHONY: zig zig-lint zig-type zig-test zig-check
+.PHONY: zig zig-lint zig-type zig-test zig-bdd zig-check
 
 PYTHON_DIR := python/ticket
 GO_DIR := go/ticket
@@ -69,3 +69,7 @@ zig-type:
 zig-test:
 	@echo "Running Zig tests..."
 	cd $(ZIG_DIR) && zig build test
+
+zig-bdd:
+	@echo "Running Zig BDD tests..."
+	bash zig/bdd.sh
