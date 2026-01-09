@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -26,6 +28,8 @@ func Run(args []string) int {
 	switch command {
 	case "create":
 		return cmdCreate(commandArgs)
+	case "query":
+		return cmdQuery(commandArgs)
 	default:
 		fmt.Println("Ticket CLI - Go port (work in progress)")
 		fmt.Printf("Command not yet implemented: %s\n", command)
@@ -276,4 +280,149 @@ func cmdCreate(args []string) int {
 
 	fmt.Println(ticketID)
 	return 0
+}
+
+func cmdQuery(args []string) int {
+	// Check if tickets directory exists
+	if _, err := os.Stat(ticketsDir); os.IsNotExist(err) {
+		return 0
+	}
+
+	var filter string
+	if len(args) > 0 {
+		filter = args[0]
+	}
+
+	// Read all ticket files
+	files, err := filepath.Glob(filepath.Join(ticketsDir, "*.md"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading tickets directory: %v\n", err)
+		return 1
+	}
+
+	var jsonLines []string
+
+	for _, file := range files {
+		ticket, err := parseTicket(file)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error parsing ticket %s: %v\n", file, err)
+			continue
+		}
+
+		jsonData, err := json.Marshal(ticket)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error marshaling ticket %s: %v\n", file, err)
+			continue
+		}
+
+		jsonLines = append(jsonLines, string(jsonData))
+	}
+
+	jsonOutput := strings.Join(jsonLines, "\n")
+	if jsonOutput == "" {
+		return 0
+	}
+
+	// Add newline at the end if there's content
+	jsonOutput += "\n"
+
+	// If filter is provided, pipe through jq
+	if filter != "" {
+		cmd := exec.Command("jq", "-c", "select("+filter+")")
+		cmd.Stdin = strings.NewReader(jsonOutput)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+
+		if err := cmd.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "jq error: %s\n", stderr.String())
+			return 1
+		}
+
+		output := stdout.String()
+		if output != "" {
+			fmt.Print(output)
+		}
+	} else {
+		fmt.Print(jsonOutput)
+	}
+
+	return 0
+}
+
+func parseTicket(filePath string) (map[string]interface{}, error) {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	lines := strings.Split(string(content), "\n")
+
+	// Find frontmatter boundaries
+	var frontmatterStart, frontmatterEnd int
+	frontmatterCount := 0
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "---" {
+			frontmatterCount++
+			if frontmatterCount == 1 {
+				frontmatterStart = i
+			} else if frontmatterCount == 2 {
+				frontmatterEnd = i
+				break
+			}
+		}
+	}
+
+	if frontmatterCount < 2 {
+		return nil, fmt.Errorf("invalid frontmatter in %s", filePath)
+	}
+
+	ticket := make(map[string]interface{})
+
+	// Parse frontmatter
+	for i := frontmatterStart + 1; i < frontmatterEnd; i++ {
+		line := lines[i]
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+
+		// Parse arrays
+		if strings.HasPrefix(value, "[") && strings.HasSuffix(value, "]") {
+			arrayContent := strings.TrimSpace(value[1 : len(value)-1])
+			if arrayContent == "" {
+				ticket[key] = []string{}
+			} else {
+				// Split by comma and trim whitespace
+				items := strings.Split(arrayContent, ",")
+				var trimmedItems []string
+				for _, item := range items {
+					trimmed := strings.TrimSpace(item)
+					if trimmed != "" {
+						trimmedItems = append(trimmedItems, trimmed)
+					}
+				}
+				ticket[key] = trimmedItems
+			}
+		} else if key == "priority" {
+			// Parse priority as integer
+			priority, err := strconv.Atoi(value)
+			if err == nil {
+				ticket[key] = priority
+			} else {
+				ticket[key] = value
+			}
+		} else {
+			ticket[key] = value
+		}
+	}
+
+	return ticket, nil
 }
