@@ -2259,10 +2259,14 @@ fn handleDepTree(allocator: std.mem.Allocator, args: []const [:0]const u8) !u8 {
     }
 
     // Print tree
-    var printed = std.StringHashMap(void).init(allocator);
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
+    var printed = std.StringHashMap(void).init(arena_allocator);
     defer printed.deinit();
 
-    try printDepTree(allocator, &tickets, root.?, "", true, root.?, &printed, full_mode);
+    try printDepTree(arena_allocator, &tickets, root.?, "", true, root.?, &printed, full_mode);
 
     return 0;
 }
@@ -2352,6 +2356,7 @@ test "TicketData struct initialization and cleanup" {
         .deps = try deps.toOwnedSlice(allocator),
         .links = try links.toOwnedSlice(allocator),
         .parent = try allocator.dupe(u8, ""),
+        .priority = 1,
         .allocator = allocator,
     };
     defer ticket.deinit();
