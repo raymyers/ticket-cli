@@ -1,6 +1,6 @@
 ---
 id: tc-ecf1
-status: open
+status: closed
 deps: [tc-ba73]
 links: []
 created: 2026-01-09T20:27:40Z
@@ -16,3 +16,9 @@ Implement the ticket_creation functionality. Add this line to zig/bdd.sh:
 # Run ticket_creation feature tests
 behave features/ticket_creation.feature
 ```
+
+## Notes
+
+**2026-01-09T21:29:29Z**
+
+Ticket creation feature has already been successfully ported to Zig in commit db39a82. All 17 BDD test scenarios pass. The implementation includes full support for title, description, design notes, acceptance criteria, type, priority, assignee, external reference, and parent ticket options. The line to run ticket_creation tests is present in zig/bdd.sh at line 13.
