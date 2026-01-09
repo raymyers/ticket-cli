@@ -62,6 +62,8 @@ def next_ticket() -> str:
     """Simple git checkout with minimal error handling."""
     result = subprocess.run(['./ticket', 'ready'], check=True, capture_output=True)
     lines = result.stdout.splitlines()
+    if not lines:
+        return ""
     return str(lines[0], "utf-8").split()[0]
 
 for i in range(MAX_ITERATIONS):
