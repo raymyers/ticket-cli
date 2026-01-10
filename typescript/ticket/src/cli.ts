@@ -618,6 +618,207 @@ function cmdAddNote(args: string[]): number {
   return 0;
 }
 
+function cmdLs(args: string[]): number {
+  if (!fs.existsSync(TICKETS_DIR)) {
+    return 0;
+  }
+
+  let statusFilter = "";
+  for (const arg of args) {
+    if (arg.startsWith("--status=")) {
+      statusFilter = arg.split("=")[1];
+    }
+  }
+
+  const allTickets = loadAllTickets();
+  const sortedIds = Object.keys(allTickets).sort();
+
+  for (const ticketId of sortedIds) {
+    const ticket = allTickets[ticketId];
+    const status = ticket.frontmatter.status || "open";
+
+    if (statusFilter && status !== statusFilter) {
+      continue;
+    }
+
+    const title = ticket.title;
+    const depsStr = ticket.frontmatter.deps || "[]";
+    const deps = parseListField(depsStr);
+
+    let depDisplay = "";
+    if (deps.length > 0) {
+      depDisplay = ` <- [${deps.join(", ")}]`;
+    }
+
+    console.log(`${ticketId.padEnd(8)} [${status}] - ${title}${depDisplay}`);
+  }
+
+  return 0;
+}
+
+function cmdReady(args: string[]): number {
+  if (!fs.existsSync(TICKETS_DIR)) {
+    return 0;
+  }
+
+  const allTickets = loadAllTickets();
+  const readyTickets: Array<[number, string, string, string]> = [];
+
+  for (const [ticketId, ticket] of Object.entries(allTickets)) {
+    const status = ticket.frontmatter.status || "open";
+
+    if (status !== "open" && status !== "in_progress") {
+      continue;
+    }
+
+    const depsStr = ticket.frontmatter.deps || "[]";
+    const deps = parseListField(depsStr);
+
+    let ready = true;
+    for (const depId of deps) {
+      if (depId in allTickets) {
+        const depStatus = allTickets[depId].frontmatter.status || "open";
+        if (depStatus !== "closed") {
+          ready = false;
+          break;
+        }
+      } else {
+        ready = false;
+        break;
+      }
+    }
+
+    if (ready) {
+      const priority = parseInt(ticket.frontmatter.priority || "2");
+      const title = ticket.title;
+      readyTickets.push([priority, ticketId, status, title]);
+    }
+  }
+
+  readyTickets.sort((a, b) => {
+    if (a[0] !== b[0]) {
+      return a[0] - b[0];
+    }
+    return a[1].localeCompare(b[1]);
+  });
+
+  for (const [priority, ticketId, status, title] of readyTickets) {
+    console.log(`${ticketId.padEnd(8)} [P${priority}][${status}] - ${title}`);
+  }
+
+  return 0;
+}
+
+function cmdBlocked(args: string[]): number {
+  if (!fs.existsSync(TICKETS_DIR)) {
+    return 0;
+  }
+
+  const allTickets = loadAllTickets();
+  const blockedTickets: Array<[number, string, string, string, string[]]> = [];
+
+  for (const [ticketId, ticket] of Object.entries(allTickets)) {
+    const status = ticket.frontmatter.status || "open";
+
+    if (status !== "open" && status !== "in_progress") {
+      continue;
+    }
+
+    const depsStr = ticket.frontmatter.deps || "[]";
+    const deps = parseListField(depsStr);
+
+    if (deps.length === 0) {
+      continue;
+    }
+
+    const unclosedBlockers: string[] = [];
+    for (const depId of deps) {
+      if (depId in allTickets) {
+        const depStatus = allTickets[depId].frontmatter.status || "open";
+        if (depStatus !== "closed") {
+          unclosedBlockers.push(depId);
+        }
+      } else {
+        unclosedBlockers.push(depId);
+      }
+    }
+
+    if (unclosedBlockers.length > 0) {
+      const priority = parseInt(ticket.frontmatter.priority || "2");
+      const title = ticket.title;
+      blockedTickets.push([priority, ticketId, status, title, unclosedBlockers]);
+    }
+  }
+
+  blockedTickets.sort((a, b) => {
+    if (a[0] !== b[0]) {
+      return a[0] - b[0];
+    }
+    return a[1].localeCompare(b[1]);
+  });
+
+  for (const [priority, ticketId, status, title, blockers] of blockedTickets) {
+    const blockersStr = blockers.join(", ");
+    console.log(`${ticketId.padEnd(8)} [P${priority}][${status}] - ${title} <- [${blockersStr}]`);
+  }
+
+  return 0;
+}
+
+function cmdClosed(args: string[]): number {
+  if (!fs.existsSync(TICKETS_DIR)) {
+    return 0;
+  }
+
+  let limit = 20;
+  for (const arg of args) {
+    if (arg.startsWith("--limit=")) {
+      limit = parseInt(arg.split("=")[1]);
+    }
+  }
+
+  const ticketFiles = fs.readdirSync(TICKETS_DIR)
+    .filter(f => f.endsWith(".md"))
+    .map(f => ({
+      name: f,
+      path: path.join(TICKETS_DIR, f),
+      mtime: fs.statSync(path.join(TICKETS_DIR, f)).mtimeMs,
+    }))
+    .sort((a, b) => b.mtime - a.mtime);
+
+  const closedTickets: Array<[string, string, string]> = [];
+  
+  for (const file of ticketFiles.slice(0, 100)) {
+    const ticket = parseTicket(file.path);
+    const status = ticket.frontmatter.status || "open";
+
+    if (status === "closed" || status === "done") {
+      const ticketId = ticket.frontmatter.id || path.basename(file.name, ".md");
+      
+      let title = "";
+      const bodyLines = ticket.body.split("\n");
+      for (const line of bodyLines) {
+        if (line.startsWith("# ")) {
+          title = line.substring(2).trim();
+          break;
+        }
+      }
+      
+      closedTickets.push([ticketId, status, title]);
+
+      if (closedTickets.length >= limit) {
+        break;
+      }
+    }
+  }
+
+  for (const [ticketId, status, title] of closedTickets) {
+    console.log(`${ticketId.padEnd(8)} [${status}] - ${title}`);
+  }
+
+  return 0;
+}
+
 function main(): number {
   const args = process.argv.slice(2);
 
@@ -643,6 +844,14 @@ function main(): number {
     return cmdQuery(commandArgs);
   } else if (command === "add-note") {
     return cmdAddNote(commandArgs);
+  } else if (command === "ls") {
+    return cmdLs(commandArgs);
+  } else if (command === "ready") {
+    return cmdReady(commandArgs);
+  } else if (command === "blocked") {
+    return cmdBlocked(commandArgs);
+  } else if (command === "closed") {
+    return cmdClosed(commandArgs);
   }
 
   console.log("Ticket CLI - TypeScript port (work in progress)");
