@@ -274,6 +274,67 @@ function cmdUnlink(args: string[]): number {
   return 0;
 }
 
+function cmdQuery(args: string[]): number {
+  if (!fs.existsSync(TICKETS_DIR)) {
+    return 0;
+  }
+  
+  const jqFilter = args.length > 0 ? args[0] : null;
+  
+  const jsonLines: string[] = [];
+  const files = fs.readdirSync(TICKETS_DIR)
+    .filter(f => f.endsWith(".md"))
+    .sort();
+  
+  for (const file of files) {
+    const filePath = path.join(TICKETS_DIR, file);
+    const ticket = parseTicket(filePath);
+    
+    const jsonObj: Record<string, any> = {};
+    for (const [key, value] of Object.entries(ticket.frontmatter)) {
+      if (key === "deps" || key === "links") {
+        jsonObj[key] = parseListField(value);
+      } else {
+        jsonObj[key] = value;
+      }
+    }
+    
+    jsonLines.push(JSON.stringify(jsonObj));
+  }
+  
+  if (jqFilter) {
+    try {
+      const { spawnSync } = require("child_process");
+      const input = jsonLines.join("\n");
+      
+      const result = spawnSync("jq", ["-c", `select(${jqFilter})`], {
+        input,
+        encoding: "utf-8",
+      });
+      
+      if (result.error) {
+        console.error("Error: jq is required for filtering");
+        return 1;
+      }
+      
+      if (result.status !== 0) {
+        return 1;
+      }
+      
+      process.stdout.write(result.stdout);
+    } catch (error) {
+      console.error("Error: jq is required for filtering");
+      return 1;
+    }
+  } else {
+    for (const line of jsonLines) {
+      console.log(line);
+    }
+  }
+  
+  return 0;
+}
+
 function main(): number {
   const args = process.argv.slice(2);
 
@@ -289,6 +350,8 @@ function main(): number {
     return cmdLink(commandArgs);
   } else if (command === "unlink") {
     return cmdUnlink(commandArgs);
+  } else if (command === "query") {
+    return cmdQuery(commandArgs);
   }
 
   console.log("Ticket CLI - TypeScript port (work in progress)");

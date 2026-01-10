@@ -11,3 +11,6 @@ export TICKET_SCRIPT="${PROJECT_ROOT}/ts_ticket.sh"
 
 # Run ticket_links feature tests
 uv run --with behave behave "${PROJECT_ROOT}/features/ticket_links.feature"
+
+# Run ticket_query feature tests
+uv run --with behave behave "${PROJECT_ROOT}/features/ticket_query.feature"
