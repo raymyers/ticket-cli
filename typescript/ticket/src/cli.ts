@@ -1,5 +1,10 @@
 #!/usr/bin/env bun
 
+import * as fs from "fs";
+import * as path from "path";
+
+const TICKETS_DIR = ".tickets";
+
 const HELP_TEXT = `tk - minimal ticket system with dependency tracking
 
 Usage: tk <command> [args]
@@ -41,6 +46,234 @@ function printHelp(): void {
   console.log(HELP_TEXT);
 }
 
+function ensureDir(): void {
+  if (!fs.existsSync(TICKETS_DIR)) {
+    fs.mkdirSync(TICKETS_DIR, { recursive: true });
+  }
+}
+
+function ticketPath(ticketId: string): string | null {
+  const exactPath = path.join(TICKETS_DIR, `${ticketId}.md`);
+  
+  if (fs.existsSync(exactPath)) {
+    return exactPath;
+  }
+  
+  if (!fs.existsSync(TICKETS_DIR)) {
+    console.error(`Error: ticket '${ticketId}' not found`);
+    return null;
+  }
+  
+  const files = fs.readdirSync(TICKETS_DIR);
+  const matches = files
+    .filter(f => f.endsWith(".md") && f.includes(ticketId))
+    .map(f => path.join(TICKETS_DIR, f));
+  
+  if (matches.length === 1) {
+    return matches[0];
+  } else if (matches.length > 1) {
+    console.error(`Error: ambiguous ID '${ticketId}' matches multiple tickets`);
+    return null;
+  } else {
+    console.error(`Error: ticket '${ticketId}' not found`);
+    return null;
+  }
+}
+
+interface Ticket {
+  frontmatter: Record<string, string>;
+  body: string;
+}
+
+function parseTicket(filePath: string): Ticket {
+  const content = fs.readFileSync(filePath, "utf-8");
+  const lines = content.split("\n");
+  
+  const frontmatter: Record<string, string> = {};
+  const bodyLines: string[] = [];
+  let inFrontmatter = false;
+  let frontmatterEnded = false;
+  
+  for (const line of lines) {
+    if (line.trim() === "---") {
+      if (!inFrontmatter) {
+        inFrontmatter = true;
+      } else {
+        frontmatterEnded = true;
+        inFrontmatter = false;
+      }
+      continue;
+    }
+    
+    if (inFrontmatter) {
+      const colonIndex = line.indexOf(":");
+      if (colonIndex !== -1) {
+        const key = line.substring(0, colonIndex).trim();
+        const value = line.substring(colonIndex + 1).trim();
+        frontmatter[key] = value;
+      }
+    } else if (frontmatterEnded) {
+      bodyLines.push(line);
+    }
+  }
+  
+  return {
+    frontmatter,
+    body: bodyLines.join("\n"),
+  };
+}
+
+function parseListField(value: string): string[] {
+  if (!value) {
+    return [];
+  }
+  value = value.trim();
+  if (value === "[]") {
+    return [];
+  }
+  value = value.replace(/^\[|\]$/g, "");
+  return value.split(",").map(item => item.trim()).filter(item => item);
+}
+
+function updateYamlField(filePath: string, field: string, value: string): void {
+  const content = fs.readFileSync(filePath, "utf-8");
+  const lines = content.split("\n");
+  
+  let updated = false;
+  let inFrontmatter = false;
+  const resultLines: string[] = [];
+  
+  for (const line of lines) {
+    if (line.trim() === "---") {
+      resultLines.push(line);
+      if (!inFrontmatter) {
+        inFrontmatter = true;
+      } else {
+        inFrontmatter = false;
+      }
+      continue;
+    }
+    
+    if (inFrontmatter && line.startsWith(`${field}:`)) {
+      resultLines.push(`${field}: ${value}`);
+      updated = true;
+    } else {
+      resultLines.push(line);
+    }
+  }
+  
+  if (!updated) {
+    const newLines: string[] = [];
+    let firstMarkerFound = false;
+    for (const line of resultLines) {
+      newLines.push(line);
+      if (!firstMarkerFound && line.trim() === "---") {
+        firstMarkerFound = true;
+        newLines.push(`${field}: ${value}`);
+      }
+    }
+    fs.writeFileSync(filePath, newLines.join("\n"), "utf-8");
+  } else {
+    fs.writeFileSync(filePath, resultLines.join("\n"), "utf-8");
+  }
+}
+
+function cmdLink(args: string[]): number {
+  if (args.length < 2) {
+    console.error("Usage: ticket link <id> <id> [id...]");
+    return 1;
+  }
+  
+  const ticketIds: string[] = [];
+  const ticketPaths: string[] = [];
+  
+  for (const ticketId of args) {
+    const filePath = ticketPath(ticketId);
+    if (!filePath) {
+      return 1;
+    }
+    ticketIds.push(path.basename(filePath, ".md"));
+    ticketPaths.push(filePath);
+  }
+  
+  let totalAdded = 0;
+  
+  for (let i = 0; i < ticketPaths.length; i++) {
+    const filePath = ticketPaths[i];
+    const currentId = ticketIds[i];
+    const ticket = parseTicket(filePath);
+    
+    const existingLinksStr = ticket.frontmatter.links || "[]";
+    const existingLinks = parseListField(existingLinksStr);
+    
+    const linksToAdd: string[] = [];
+    for (let j = 0; j < ticketIds.length; j++) {
+      if (i !== j && !existingLinks.includes(ticketIds[j])) {
+        linksToAdd.push(ticketIds[j]);
+      }
+    }
+    
+    if (linksToAdd.length > 0) {
+      const newLinks = [...existingLinks, ...linksToAdd];
+      const newLinksStr = "[" + newLinks.join(", ") + "]";
+      updateYamlField(filePath, "links", newLinksStr);
+      totalAdded += linksToAdd.length;
+    }
+  }
+  
+  if (totalAdded === 0) {
+    console.log("All links already exist");
+  } else {
+    console.log(`Added ${totalAdded} link(s) between ${ticketIds.length} tickets`);
+  }
+  
+  return 0;
+}
+
+function cmdUnlink(args: string[]): number {
+  if (args.length !== 2) {
+    console.error("Usage: ticket unlink <id> <target-id>");
+    return 1;
+  }
+  
+  const ticketId = args[0];
+  const targetId = args[1];
+  
+  const filePath = ticketPath(ticketId);
+  const targetPath = ticketPath(targetId);
+  
+  if (!filePath || !targetPath) {
+    return 1;
+  }
+  
+  const actualId = path.basename(filePath, ".md");
+  const actualTargetId = path.basename(targetPath, ".md");
+  
+  const ticket = parseTicket(filePath);
+  const existingLinksStr = ticket.frontmatter.links || "[]";
+  const existingLinks = parseListField(existingLinksStr);
+  
+  if (!existingLinks.includes(actualTargetId)) {
+    console.log("Link not found");
+    return 1;
+  }
+  
+  const newLinks = existingLinks.filter(link => link !== actualTargetId);
+  const newLinksStr = "[" + newLinks.join(", ") + "]";
+  updateYamlField(filePath, "links", newLinksStr);
+  
+  const targetTicket = parseTicket(targetPath);
+  const targetLinksStr = targetTicket.frontmatter.links || "[]";
+  const targetLinks = parseListField(targetLinksStr);
+  
+  const newTargetLinks = targetLinks.filter(link => link !== actualId);
+  const newTargetLinksStr = "[" + newTargetLinks.join(", ") + "]";
+  updateYamlField(targetPath, "links", newTargetLinksStr);
+  
+  console.log(`Removed link: ${actualId} <-> ${actualTargetId}`);
+  return 0;
+}
+
 function main(): number {
   const args = process.argv.slice(2);
 
@@ -50,7 +283,13 @@ function main(): number {
   }
 
   const command = args[0];
-  const _commandArgs = args.slice(1);
+  const commandArgs = args.slice(1);
+
+  if (command === "link") {
+    return cmdLink(commandArgs);
+  } else if (command === "unlink") {
+    return cmdUnlink(commandArgs);
+  }
 
   console.log("Ticket CLI - TypeScript port (work in progress)");
   console.log(`Command not yet implemented: ${command}`);
