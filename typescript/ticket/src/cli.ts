@@ -135,6 +135,50 @@ function parseListField(value: string): string[] {
   return value.split(",").map(item => item.trim()).filter(item => item);
 }
 
+interface TicketData {
+  frontmatter: Record<string, string>;
+  body: string;
+  title: string;
+  filePath: string;
+}
+
+function loadAllTickets(): Record<string, TicketData> {
+  if (!fs.existsSync(TICKETS_DIR)) {
+    return {};
+  }
+  
+  const tickets: Record<string, TicketData> = {};
+  const files = fs.readdirSync(TICKETS_DIR);
+  
+  for (const file of files) {
+    if (!file.endsWith(".md")) {
+      continue;
+    }
+    
+    const filePath = path.join(TICKETS_DIR, file);
+    const ticket = parseTicket(filePath);
+    const ticketId = ticket.frontmatter.id || path.basename(file, ".md");
+    
+    let title = "";
+    const bodyLines = ticket.body.split("\n");
+    for (const line of bodyLines) {
+      if (line.startsWith("# ")) {
+        title = line.substring(2).trim();
+        break;
+      }
+    }
+    
+    tickets[ticketId] = {
+      frontmatter: ticket.frontmatter,
+      body: ticket.body,
+      title,
+      filePath,
+    };
+  }
+  
+  return tickets;
+}
+
 function updateYamlField(filePath: string, field: string, value: string): void {
   const content = fs.readFileSync(filePath, "utf-8");
   const lines = content.split("\n");
@@ -287,8 +331,125 @@ function cmdShow(args: string[]): number {
     return 1;
   }
   
+  const targetId = path.basename(filePath, ".md");
+  
+  const allTickets = loadAllTickets();
+  
+  if (!(targetId in allTickets)) {
+    console.error(`Error: ticket '${ticketId}' not found`);
+    return 1;
+  }
+  
+  const targetTicket = allTickets[targetId];
+  const targetFm = targetTicket.frontmatter;
+  
+  const blockers: Array<[string, string, string]> = [];
+  const blocking: Array<[string, string, string]> = [];
+  const children: Array<[string, string, string]> = [];
+  const linked: Array<[string, string, string]> = [];
+  
+  const targetDeps = parseListField(targetFm.deps || "[]");
+  const targetLinks = parseListField(targetFm.links || "[]");
+  const targetParent = targetFm.parent || "";
+  
+  for (const [tid, ticket] of Object.entries(allTickets)) {
+    const fm = ticket.frontmatter;
+    const status = fm.status || "open";
+    
+    const deps = parseListField(fm.deps || "[]");
+    if (deps.includes(targetId) && status !== "closed") {
+      blocking.push([tid, status, ticket.title]);
+    }
+    
+    const parent = fm.parent || "";
+    if (parent === targetId) {
+      children.push([tid, status, ticket.title]);
+    }
+  }
+  
+  for (const dep of targetDeps) {
+    if (dep in allTickets) {
+      const depStatus = allTickets[dep].frontmatter.status || "open";
+      if (depStatus !== "closed") {
+        blockers.push([dep, depStatus, allTickets[dep].title]);
+      }
+    }
+  }
+  
+  for (const link of targetLinks) {
+    if (link in allTickets) {
+      const linkStatus = allTickets[link].frontmatter.status || "open";
+      linked.push([link, linkStatus, allTickets[link].title]);
+    }
+  }
+  
   const content = fs.readFileSync(filePath, "utf-8");
-  console.log(content);
+  const lines = content.split("\n");
+  let inFrontmatter = false;
+  
+  for (const line of lines) {
+    if (line.trim() === "---") {
+      if (!inFrontmatter) {
+        inFrontmatter = true;
+        console.log(line);
+      } else {
+        inFrontmatter = false;
+        console.log(line);
+      }
+      continue;
+    }
+    
+    if (inFrontmatter) {
+      if (line.startsWith("parent:") && targetParent) {
+        if (targetParent in allTickets) {
+          const parentTitle = allTickets[targetParent].title;
+          console.log(`${line}  # ${parentTitle}`);
+        } else {
+          console.log(line);
+        }
+      } else {
+        console.log(line);
+      }
+    } else {
+      console.log(line);
+    }
+  }
+  
+  if (blockers.length > 0) {
+    console.log();
+    console.log("## Blockers");
+    console.log();
+    for (const [depId, status, title] of blockers) {
+      console.log(`- ${depId} [${status}] ${title}`);
+    }
+  }
+  
+  if (blocking.length > 0) {
+    console.log();
+    console.log("## Blocking");
+    console.log();
+    for (const [tid, status, title] of blocking) {
+      console.log(`- ${tid} [${status}] ${title}`);
+    }
+  }
+  
+  if (children.length > 0) {
+    console.log();
+    console.log("## Children");
+    console.log();
+    for (const [tid, status, title] of children) {
+      console.log(`- ${tid} [${status}] ${title}`);
+    }
+  }
+  
+  if (linked.length > 0) {
+    console.log();
+    console.log("## Linked");
+    console.log();
+    for (const [tid, status, title] of linked) {
+      console.log(`- ${tid} [${status}] ${title}`);
+    }
+  }
   
   return 0;
 }
