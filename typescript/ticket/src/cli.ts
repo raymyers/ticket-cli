@@ -574,8 +574,13 @@ function cmdEdit(args: string[]): number {
 }
 
 function cmdDep(args: string[]): number {
+  if (args.length > 0 && args[0] === "tree") {
+    return cmdDepTree(args.slice(1));
+  }
+  
   if (args.length < 2) {
     console.error("Usage: ticket dep <id> <dependency-id>");
+    console.error("       ticket dep tree [--full] <id>  - show dependency tree");
     return 1;
   }
   
@@ -606,6 +611,179 @@ function cmdDep(args: string[]): number {
   updateYamlField(filePath, "deps", newDepsStr);
   
   console.log(`Added dependency: ${actualId} -> ${actualDepId}`);
+  return 0;
+}
+
+function cmdUndep(args: string[]): number {
+  if (args.length < 2) {
+    console.error("Usage: ticket undep <id> <dependency-id>");
+    return 1;
+  }
+  
+  const ticketId = args[0];
+  const depId = args[1];
+  
+  const filePath = ticketPath(ticketId);
+  const depPath = ticketPath(depId);
+  
+  if (!filePath || !depPath) {
+    return 1;
+  }
+  
+  const actualId = path.basename(filePath, ".md");
+  const actualDepId = path.basename(depPath, ".md");
+  
+  const ticket = parseTicket(filePath);
+  const existingDepsStr = ticket.frontmatter.deps || "[]";
+  const existingDeps = parseListField(existingDepsStr);
+  
+  if (!existingDeps.includes(actualDepId)) {
+    console.log("Dependency not found");
+    return 1;
+  }
+  
+  const newDeps = existingDeps.filter(dep => dep !== actualDepId);
+  const newDepsStr = "[" + newDeps.join(", ") + "]";
+  updateYamlField(filePath, "deps", newDepsStr);
+  
+  console.log(`Removed dependency: ${actualId} -/-> ${actualDepId}`);
+  return 0;
+}
+
+function cmdDepTree(args: string[]): number {
+  let fullMode = false;
+  let rootId: string | null = null;
+  
+  for (const arg of args) {
+    if (arg === "--full") {
+      fullMode = true;
+    } else {
+      rootId = arg;
+    }
+  }
+  
+  if (!rootId) {
+    console.error("Usage: ticket dep tree [--full] <id>");
+    return 1;
+  }
+  
+  const allTickets = loadAllTickets();
+  
+  if (Object.keys(allTickets).length === 0) {
+    console.error(`Error: ticket ${rootId} not found`);
+    return 1;
+  }
+  
+  let root: string | null = null;
+  for (const ticketId in allTickets) {
+    if (ticketId.includes(rootId)) {
+      if (root !== null) {
+        console.error(`Error: ambiguous ID ${rootId}`);
+        return 1;
+      }
+      root = ticketId;
+    }
+  }
+  
+  if (root === null) {
+    console.error(`Error: ticket ${rootId} not found`);
+    return 1;
+  }
+  
+  const depsMap: Record<string, string[]> = {};
+  for (const ticketId in allTickets) {
+    const ticket = allTickets[ticketId];
+    const depsStr = ticket.frontmatter.deps || "[]";
+    const deps = parseListField(depsStr);
+    depsMap[ticketId] = deps;
+  }
+  
+  function calculateMaxDepth(ticketId: string, visited: Set<string> = new Set()): number {
+    if (visited.has(ticketId)) {
+      return 0;
+    }
+    
+    visited.add(ticketId);
+    const deps = depsMap[ticketId] || [];
+    
+    if (deps.length === 0) {
+      return 0;
+    }
+    
+    let maxDepth = 0;
+    for (const depId of deps) {
+      const depth = calculateMaxDepth(depId, new Set(visited));
+      if (depth > maxDepth) {
+        maxDepth = depth;
+      }
+    }
+    
+    return maxDepth + 1;
+  }
+  
+  function getSortedDeps(ticketId: string): string[] {
+    const deps = depsMap[ticketId] || [];
+    
+    const depsWithDepth = deps.map(depId => ({
+      id: depId,
+      depth: calculateMaxDepth(depId),
+    }));
+    
+    depsWithDepth.sort((a, b) => {
+      if (a.depth !== b.depth) {
+        return a.depth - b.depth;
+      }
+      return a.id.localeCompare(b.id);
+    });
+    
+    return depsWithDepth.map(d => d.id);
+  }
+  
+  const printed = new Set<string>();
+  
+  function printTree(ticketId: string, prefix: string = "", isLast: boolean = true, path: Set<string> = new Set()): void {
+    if (path.has(ticketId)) {
+      return;
+    }
+    
+    if (!fullMode && printed.has(ticketId)) {
+      return;
+    }
+    
+    if (!(ticketId in allTickets)) {
+      return;
+    }
+    
+    const ticket = allTickets[ticketId];
+    const status = ticket.frontmatter.status || "open";
+    const title = ticket.title;
+    
+    if (ticketId === root) {
+      console.log(`${ticketId} [${status}] ${title}`);
+    } else {
+      const connector = isLast ? "└── " : "├── ";
+      console.log(`${prefix}${connector}${ticketId} [${status}] ${title}`);
+    }
+    
+    printed.add(ticketId);
+    
+    const deps = getSortedDeps(ticketId);
+    
+    if (deps.length > 0) {
+      const newPath = new Set(path);
+      newPath.add(ticketId);
+      
+      const newPrefix = ticketId === root ? "" : (isLast ? prefix + "    " : prefix + "│   ");
+      
+      for (let i = 0; i < deps.length; i++) {
+        const depId = deps[i];
+        const isLastDep = (i === deps.length - 1);
+        printTree(depId, newPrefix, isLastDep, newPath);
+      }
+    }
+  }
+  
+  printTree(root);
   return 0;
 }
 
@@ -1068,6 +1246,8 @@ function main(): number {
     return cmdReopen(commandArgs);
   } else if (command === "dep") {
     return cmdDep(commandArgs);
+  } else if (command === "undep") {
+    return cmdUndep(commandArgs);
   } else if (command === "link") {
     return cmdLink(commandArgs);
   } else if (command === "unlink") {
