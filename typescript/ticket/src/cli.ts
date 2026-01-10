@@ -484,6 +484,33 @@ function cmdStatus(args: string[]): number {
   return 0;
 }
 
+function cmdStart(args: string[]): number {
+  if (args.length === 0) {
+    console.error("Usage: ticket start <id>");
+    return 1;
+  }
+  
+  return cmdStatus([args[0], "in_progress"]);
+}
+
+function cmdClose(args: string[]): number {
+  if (args.length === 0) {
+    console.error("Usage: ticket close <id>");
+    return 1;
+  }
+  
+  return cmdStatus([args[0], "closed"]);
+}
+
+function cmdReopen(args: string[]): number {
+  if (args.length === 0) {
+    console.error("Usage: ticket reopen <id>");
+    return 1;
+  }
+  
+  return cmdStatus([args[0], "open"]);
+}
+
 function cmdDep(args: string[]): number {
   if (args.length < 2) {
     console.error("Usage: ticket dep <id> <dependency-id>");
@@ -834,6 +861,12 @@ function main(): number {
     return cmdShow(commandArgs);
   } else if (command === "status") {
     return cmdStatus(commandArgs);
+  } else if (command === "start") {
+    return cmdStart(commandArgs);
+  } else if (command === "close") {
+    return cmdClose(commandArgs);
+  } else if (command === "reopen") {
+    return cmdReopen(commandArgs);
   } else if (command === "dep") {
     return cmdDep(commandArgs);
   } else if (command === "link") {
