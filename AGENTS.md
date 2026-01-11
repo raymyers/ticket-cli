@@ -4,7 +4,10 @@ See @README.md for usage documentation. Run `tk help` for command reference. Alw
 
 ## Architecture
 
-Single-file bash implementation (~900 lines). Uses awk for performant bulk operations on large ticket sets.
+The ticket-cli project has five implementations:
+
+### Bash (Reference Implementation)
+Single-file bash implementation (~900 lines) at `./ticket`. Uses awk for performant bulk operations on large ticket sets.
 
 Key functions:
 - `generate_id()` - Creates IDs from directory name prefix + timestamp hash
@@ -14,6 +17,30 @@ Key functions:
 - `cmd_ready()`, `cmd_blocked()`, `cmd_ls()` - awk-based bulk listing with sorting
 
 Dependencies: bash, sed, awk, find. Optional: ripgrep (faster grep), jq (for query command).
+
+### Language Ports
+
+Four additional implementations have been created:
+
+1. **Python** (`python/ticket/`) - Using uv, pytest, ruff. Entry point: `./py_ticket.sh`
+2. **Go** (`go/ticket/`) - Using go modules. Entry point: `./go_ticket.sh`
+3. **TypeScript** (`typescript/ticket/`) - Using Bun. Entry point: `./ts_ticket.sh`
+4. **Zig** (`zig/ticket/`) - Native Zig. Entry point: `./zig_ticket.sh`
+
+Each implementation:
+- Follows the specification in `docs/SPEC.md`
+- Has its own BDD test suite (ported from Behave features)
+- Has a wrapper script at the project root
+- Has a `bdd.sh` script for running tests
+- Is integrated into the root `Makefile`
+
+**Spec Review Documents**: Each implementation has been reviewed against the specification:
+- `docs/SPEC_REVIEW_PYTHON.md`
+- `docs/SPEC_REVIEW_GO.md`
+- `docs/SPEC_REVIEW_TYPESCRIPT.md`
+- `docs/SPEC_REVIEW_ZIG.md`
+
+**Porting Guide**: See `docs/NEW_IMPLEMENTATION.md` for instructions on porting to new languages.
 
 ## Behavior Driven Development
 
