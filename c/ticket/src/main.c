@@ -2,6 +2,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include <dirent.h>
 #include <unistd.h>
 #include <time.h>
@@ -1434,10 +1436,229 @@ static int cmd_dep_tree(int argc, char *argv[]) {
     return 0;
 }
 
+static void escape_json_string(const char *str, char *out, size_t out_size) {
+    size_t j = 0;
+    for (size_t i = 0; str[i] != '\0' && j < out_size - 2; i++) {
+        if (str[i] == '"' || str[i] == '\\') {
+            out[j++] = '\\';
+            if (j >= out_size - 2) break;
+            out[j++] = str[i];
+        } else if (str[i] == '\n') {
+            out[j++] = '\\';
+            if (j >= out_size - 2) break;
+            out[j++] = 'n';
+        } else if (str[i] == '\r') {
+            out[j++] = '\\';
+            if (j >= out_size - 2) break;
+            out[j++] = 'r';
+        } else if (str[i] == '\t') {
+            out[j++] = '\\';
+            if (j >= out_size - 2) break;
+            out[j++] = 't';
+        } else {
+            out[j++] = str[i];
+        }
+    }
+    out[j] = '\0';
+}
+
+static void parse_array_field(const char *value, char items[MAX_DEPS][MAX_PATH], int *count) {
+    *count = 0;
+    const char *bracket = strchr(value, '[');
+    if (bracket == NULL) return;
+    
+    char *end = strchr(bracket, ']');
+    if (end == NULL) return;
+    
+    char buffer[4096];
+    size_t len = end - bracket - 1;
+    if (len >= sizeof(buffer)) len = sizeof(buffer) - 1;
+    strncpy(buffer, bracket + 1, len);
+    buffer[len] = '\0';
+    
+    if (strlen(buffer) == 0) return;
+    
+    char *token = strtok(buffer, ",");
+    while (token != NULL && *count < MAX_DEPS) {
+        while (*token == ' ') token++;
+        char *token_end = token + strlen(token) - 1;
+        while (token_end > token && (*token_end == ' ' || *token_end == '\n')) {
+            *token_end = '\0';
+            token_end--;
+        }
+        if (*token != '\0') {
+            strncpy(items[*count], token, MAX_PATH - 1);
+            items[*count][MAX_PATH - 1] = '\0';
+            (*count)++;
+        }
+        token = strtok(NULL, ",");
+    }
+}
+
 static int cmd_query(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-    return cmd_not_implemented("query");
+    const char *jq_filter = (argc > 1) ? argv[1] : NULL;
+    
+    DIR *dir = opendir(TICKETS_DIR);
+    if (dir == NULL) {
+        return 0;
+    }
+    
+    char **json_lines = malloc(MAX_TICKETS * sizeof(char*));
+    if (json_lines == NULL) {
+        closedir(dir);
+        return 1;
+    }
+    int line_count = 0;
+    
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL && line_count < MAX_TICKETS) {
+        if (entry->d_name[0] == '.') continue;
+        
+        size_t len = strlen(entry->d_name);
+        if (len < 4 || strcmp(entry->d_name + len - 3, ".md") != 0) continue;
+        
+        char file_path[MAX_PATH];
+        snprintf(file_path, sizeof(file_path), "%s/%s", TICKETS_DIR, entry->d_name);
+        
+        FILE *file = fopen(file_path, "r");
+        if (file == NULL) continue;
+        
+        char json[8192] = "{";
+        int in_frontmatter = 0;
+        int frontmatter_started = 0;
+        int first_field = 1;
+        char line[1024];
+        
+        while (fgets(line, sizeof(line), file) != NULL) {
+            if (strcmp(line, "---\n") == 0) {
+                if (!frontmatter_started) {
+                    in_frontmatter = 1;
+                    frontmatter_started = 1;
+                } else {
+                    in_frontmatter = 0;
+                    break;
+                }
+                continue;
+            }
+            
+            if (in_frontmatter && strchr(line, ':') != NULL) {
+                char key[256], value[4096];
+                char *colon = strchr(line, ':');
+                size_t key_len = colon - line;
+                if (key_len >= sizeof(key)) key_len = sizeof(key) - 1;
+                strncpy(key, line, key_len);
+                key[key_len] = '\0';
+                
+                char *val_start = colon + 1;
+                while (*val_start == ' ') val_start++;
+                strncpy(value, val_start, sizeof(value) - 1);
+                value[sizeof(value) - 1] = '\0';
+                
+                size_t val_len = strlen(value);
+                if (val_len > 0 && value[val_len - 1] == '\n') {
+                    value[val_len - 1] = '\0';
+                }
+                
+                if (!first_field) {
+                    strcat(json, ",");
+                }
+                first_field = 0;
+                
+                char escaped_key[512];
+                escape_json_string(key, escaped_key, sizeof(escaped_key));
+                
+                char field[4096];
+                snprintf(field, sizeof(field), "\"%s\":", escaped_key);
+                strcat(json, field);
+                
+                if (strcmp(key, "deps") == 0 || strcmp(key, "links") == 0) {
+                    char items[MAX_DEPS][MAX_PATH];
+                    int count;
+                    parse_array_field(value, items, &count);
+                    
+                    strcat(json, "[");
+                    for (int i = 0; i < count; i++) {
+                        if (i > 0) strcat(json, ",");
+                        char escaped_item[MAX_PATH * 2];
+                        escape_json_string(items[i], escaped_item, sizeof(escaped_item));
+                        char item_json[MAX_PATH * 2 + 3];
+                        snprintf(item_json, sizeof(item_json), "\"%s\"", escaped_item);
+                        strcat(json, item_json);
+                    }
+                    strcat(json, "]");
+                } else if (strcmp(key, "priority") == 0) {
+                    char num[64];
+                    snprintf(num, sizeof(num), "%s", value);
+                    strcat(json, num);
+                } else {
+                    char escaped_value[4096];
+                    escape_json_string(value, escaped_value, sizeof(escaped_value));
+                    char value_json[4096];
+                    snprintf(value_json, sizeof(value_json), "\"%s\"", escaped_value);
+                    strcat(json, value_json);
+                }
+            }
+        }
+        
+        strcat(json, "}");
+        fclose(file);
+        
+        json_lines[line_count] = strdup(json);
+        line_count++;
+    }
+    
+    closedir(dir);
+    
+    if (jq_filter) {
+        int pipefd[2];
+        if (pipe(pipefd) == -1) {
+            for (int i = 0; i < line_count; i++) free(json_lines[i]);
+            free(json_lines);
+            return 1;
+        }
+        
+        pid_t pid = fork();
+        if (pid == -1) {
+            close(pipefd[0]);
+            close(pipefd[1]);
+            for (int i = 0; i < line_count; i++) free(json_lines[i]);
+            free(json_lines);
+            return 1;
+        }
+        
+        if (pid == 0) {
+            close(pipefd[1]);
+            dup2(pipefd[0], STDIN_FILENO);
+            close(pipefd[0]);
+            
+            char filter_arg[1024];
+            snprintf(filter_arg, sizeof(filter_arg), "select(%s)", jq_filter);
+            execlp("jq", "jq", "-c", filter_arg, NULL);
+            exit(1);
+        } else {
+            close(pipefd[0]);
+            
+            for (int i = 0; i < line_count; i++) {
+                write(pipefd[1], json_lines[i], strlen(json_lines[i]));
+                write(pipefd[1], "\n", 1);
+                free(json_lines[i]);
+            }
+            close(pipefd[1]);
+            
+            int status;
+            waitpid(pid, &status, 0);
+            free(json_lines);
+            return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+        }
+    } else {
+        for (int i = 0; i < line_count; i++) {
+            printf("%s\n", json_lines[i]);
+            free(json_lines[i]);
+        }
+        free(json_lines);
+    }
+    
+    return 0;
 }
 
 int main(int argc, char *argv[]) {
