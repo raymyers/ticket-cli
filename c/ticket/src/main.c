@@ -1186,11 +1186,46 @@ static int cmd_unlink(int argc, char *argv[])
 static int cmd_edit(int argc, char *argv[])
 {
     if (argc < 2) {
-        fprintf(stderr, "Error: ticket ID required\n");
+        fprintf(stderr, "Usage: ticket edit <id>\n");
         return 1;
     }
-    (void)argv;
-    return cmd_not_implemented("edit");
+
+    char resolved_path[MAX_PATH];
+    if (resolve_ticket_id(argv[1], resolved_path, sizeof(resolved_path)) != 0) {
+        return 1;
+    }
+
+    if (isatty(STDIN_FILENO) && isatty(STDOUT_FILENO)) {
+        const char *editor = getenv("EDITOR");
+        if (editor == NULL) {
+            editor = "vi";
+        }
+
+        pid_t pid = fork();
+        if (pid == -1) {
+            fprintf(stderr, "Error: failed to fork process\n");
+            return 1;
+        }
+
+        if (pid == 0) {
+            execlp(editor, editor, resolved_path, (char *)NULL);
+            fprintf(stderr, "Error: failed to execute editor '%s'\n", editor);
+            exit(1);
+        } else {
+            int status;
+            if (waitpid(pid, &status, 0) == -1) {
+                fprintf(stderr, "Error: failed to wait for editor process\n");
+                return 1;
+            }
+            if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+                return 1;
+            }
+        }
+    } else {
+        printf("Edit ticket file: %s\n", resolved_path);
+    }
+
+    return 0;
 }
 
 static int cmd_add_note(int argc, char *argv[])
