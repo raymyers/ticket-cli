@@ -328,7 +328,8 @@ def run():
 
     if args.interactive:
         run_interactive(llm, args)
-        return
+    else:
+        run_ticket_agent(llm, args)
 
 
 
