@@ -817,12 +817,87 @@ static int cmd_edit(int argc, char *argv[]) {
 }
 
 static int cmd_add_note(int argc, char *argv[]) {
-    if (argc < 3) {
-        fprintf(stderr, "Error: ticket ID and note text required\n");
+    if (argc < 2) {
+        fprintf(stderr, "Usage: ticket add-note <id> [note text]\n");
         return 1;
     }
-    (void)argv;
-    return cmd_not_implemented("add-note");
+    
+    const char *ticket_id = argv[1];
+    char resolved_path[MAX_PATH];
+    
+    if (resolve_ticket_id(ticket_id, resolved_path, sizeof(resolved_path)) != 0) {
+        return 1;
+    }
+    
+    const char *basename = strrchr(resolved_path, '/');
+    basename = basename ? basename + 1 : resolved_path;
+    char target_id[MAX_PATH];
+    snprintf(target_id, sizeof(target_id), "%.*s", (int)(strlen(basename) - 3), basename);
+    
+    char note[4096] = "";
+    
+    if (argc > 2) {
+        for (int i = 2; i < argc; i++) {
+            if (i > 2) {
+                strncat(note, " ", sizeof(note) - strlen(note) - 1);
+            }
+            strncat(note, argv[i], sizeof(note) - strlen(note) - 1);
+        }
+    } else if (!isatty(STDIN_FILENO)) {
+        size_t total = 0;
+        char buffer[1024];
+        while (fgets(buffer, sizeof(buffer), stdin) != NULL && total < sizeof(note) - 1) {
+            size_t len = strlen(buffer);
+            if (total + len < sizeof(note)) {
+                strcat(note, buffer);
+                total += len;
+            }
+        }
+        if (total > 0 && note[total - 1] == '\n') {
+            note[total - 1] = '\0';
+        }
+    } else {
+        fprintf(stderr, "Error: no note provided\n");
+        return 1;
+    }
+    
+    char timestamp[64];
+    get_iso_date(timestamp, sizeof(timestamp));
+    
+    FILE *file = fopen(resolved_path, "r");
+    if (file == NULL) {
+        fprintf(stderr, "Error: cannot read ticket file\n");
+        return 1;
+    }
+    
+    char content[65536];
+    size_t content_len = 0;
+    size_t bytes_read;
+    while ((bytes_read = fread(content + content_len, 1, sizeof(content) - content_len - 1, file)) > 0) {
+        content_len += bytes_read;
+    }
+    content[content_len] = '\0';
+    fclose(file);
+    
+    if (strstr(content, "## Notes") == NULL) {
+        strncat(content, "\n## Notes\n", sizeof(content) - strlen(content) - 1);
+    }
+    
+    char note_entry[4096];
+    snprintf(note_entry, sizeof(note_entry), "\n**%s**\n\n%s\n", timestamp, note);
+    strncat(content, note_entry, sizeof(content) - strlen(content) - 1);
+    
+    file = fopen(resolved_path, "w");
+    if (file == NULL) {
+        fprintf(stderr, "Error: cannot write ticket file\n");
+        return 1;
+    }
+    
+    fputs(content, file);
+    fclose(file);
+    
+    printf("Note added to %s\n", target_id);
+    return 0;
 }
 
 static int cmd_query(int argc, char *argv[]) {
