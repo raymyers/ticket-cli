@@ -122,12 +122,6 @@ static int resolve_ticket_id(const char *ticket_id, char *resolved_path, size_t 
     return 0;
 }
 
-static int cmd_not_implemented(const char *command)
-{
-    fprintf(stderr, "Command '%s' not yet implemented\n", command);
-    return 1;
-}
-
 static void get_iso_date(char *buffer, size_t size)
 {
     time_t now = time(NULL);
@@ -512,12 +506,24 @@ static int cmd_status(int argc, char *argv[])
         return 1;
     }
 
+    const char *new_status = argv[2];
+
+    if (strcmp(new_status, "open") != 0 && 
+        strcmp(new_status, "in_progress") != 0 && 
+        strcmp(new_status, "closed") != 0) {
+        fprintf(stderr, "Error: invalid status '%s'. Valid statuses: open in_progress closed\n", new_status);
+        return 1;
+    }
+
     char resolved_path[MAX_PATH];
     if (resolve_ticket_id(argv[1], resolved_path, sizeof(resolved_path)) != 0) {
         return 1;
     }
 
-    const char *new_status = argv[2];
+    const char *basename = strrchr(resolved_path, '/');
+    basename = basename ? basename + 1 : resolved_path;
+    char ticket_id[MAX_PATH];
+    snprintf(ticket_id, sizeof(ticket_id), "%.*s", (int)(strlen(basename) - 3), basename);
 
     FILE *file = fopen(resolved_path, "r");
     if (file == NULL) {
@@ -559,6 +565,7 @@ static int cmd_status(int argc, char *argv[])
         return 1;
     }
 
+    printf("Updated %s -> %s\n", ticket_id, new_status);
     return 0;
 }
 
@@ -568,8 +575,8 @@ static int cmd_start(int argc, char *argv[])
         fprintf(stderr, "Error: ticket ID required\n");
         return 1;
     }
-    (void)argv;
-    return cmd_not_implemented("start");
+    char *new_argv[] = {argv[0], argv[1], "in_progress"};
+    return cmd_status(3, new_argv);
 }
 
 static int cmd_close(int argc, char *argv[])
@@ -578,8 +585,8 @@ static int cmd_close(int argc, char *argv[])
         fprintf(stderr, "Error: ticket ID required\n");
         return 1;
     }
-    (void)argv;
-    return cmd_not_implemented("close");
+    char *new_argv[] = {argv[0], argv[1], "closed"};
+    return cmd_status(3, new_argv);
 }
 
 static int cmd_reopen(int argc, char *argv[])
@@ -588,8 +595,8 @@ static int cmd_reopen(int argc, char *argv[])
         fprintf(stderr, "Error: ticket ID required\n");
         return 1;
     }
-    (void)argv;
-    return cmd_not_implemented("reopen");
+    char *new_argv[] = {argv[0], argv[1], "open"};
+    return cmd_status(3, new_argv);
 }
 
 static int parse_deps(const char *file_path, char deps[MAX_DEPS][MAX_PATH], int *dep_count);
