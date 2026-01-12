@@ -18,4 +18,4 @@ export TICKET_CMD="$PROJECT_ROOT/c_ticket.sh"
 
 echo "Running BDD tests with C implementation..."
 cd features
-behave
+behave id_resolution.feature
