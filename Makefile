@@ -2,11 +2,13 @@
 .PHONY: go go-lint go-type go-fmt go-test go-bdd go-check
 .PHONY: zig zig-lint zig-type zig-test zig-bdd zig-check
 .PHONY: typescript typescript-lint typescript-type typescript-test typescript-bdd typescript-check
+.PHONY: c c-build c-test c-check c-lint c-format c-clean c-bdd
 
 PYTHON_DIR := python/ticket
 GO_DIR := go/ticket
 ZIG_DIR := zig/ticket
 TYPESCRIPT_DIR := typescript/ticket
+C_DIR := c/ticket
 
 python: python-check
 
@@ -95,3 +97,31 @@ typescript-test:
 typescript-bdd:
 	@echo "Running TypeScript BDD tests..."
 	bash typescript/bdd.sh
+
+c: c-check
+
+c-check: c-lint c-build c-test
+
+c-build:
+	@echo "Building C implementation..."
+	cd $(C_DIR) && $(MAKE)
+
+c-test:
+	@echo "Running C tests..."
+	cd $(C_DIR) && $(MAKE) test
+
+c-lint:
+	@echo "Checking C code formatting..."
+	cd $(C_DIR) && $(MAKE) lint
+
+c-format:
+	@echo "Formatting C code..."
+	cd $(C_DIR) && $(MAKE) format
+
+c-clean:
+	@echo "Cleaning C build artifacts..."
+	cd $(C_DIR) && $(MAKE) clean
+
+c-bdd:
+	@echo "Running C BDD tests..."
+	bash c/bdd.sh
