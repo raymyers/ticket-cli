@@ -12,7 +12,8 @@
 #define MAX_PATH 1024
 #define MAX_MATCHES 100
 #define MAX_LINKS 100
-#define MAX_TICKETS 100
+#define MAX_DEPS 100
+#define MAX_TICKETS 1000
 
 static void print_usage(const char *program_name) {
     printf("Ticket CLI - C Implementation\n");
@@ -27,7 +28,8 @@ static void print_usage(const char *program_name) {
     printf("  close <id>                  Set status to closed\n");
     printf("  reopen <id>                 Set status to open\n");
     printf("  dep <id> <dep-id>           Add dependency\n");
-    printf("  dep tree <id>               Show dependency tree\n");
+    printf("  undep <id> <dep-id>         Remove dependency\n");
+    printf("  dep tree [--full] <id>      Show dependency tree\n");
     printf("  link <id> <id> [id...]      Add symmetric links\n");
     printf("  unlink <id> <id>            Remove symmetric link\n");
     printf("  edit <id>                   Edit ticket in $EDITOR\n");
@@ -423,9 +425,26 @@ static int cmd_reopen(int argc, char *argv[]) {
     return cmd_not_implemented("reopen");
 }
 
+static int parse_deps(const char *file_path, char deps[MAX_DEPS][MAX_PATH], int *dep_count);
+static int has_dep(char deps[MAX_DEPS][MAX_PATH], int dep_count, const char *dep_id);
+static int add_dep_to_file(const char *file_path, const char *dep_id);
+static int cmd_dep_tree(int argc, char *argv[]);
+static int cmd_undep(int argc, char *argv[]);
+
 static int cmd_dep(int argc, char *argv[]) {
+    if (argc < 1) {
+        fprintf(stderr, "Usage: ticket dep <id> <dependency-id>\n");
+        fprintf(stderr, "       ticket dep tree [--full] <id>  - show dependency tree\n");
+        return 1;
+    }
+    
+    if (strcmp(argv[1], "tree") == 0) {
+        return cmd_dep_tree(argc - 1, &argv[1]);
+    }
+    
     if (argc < 3) {
-        fprintf(stderr, "Error: ticket ID and dependency ID required\n");
+        fprintf(stderr, "Usage: ticket dep <id> <dependency-id>\n");
+        fprintf(stderr, "       ticket dep tree [--full] <id>  - show dependency tree\n");
         return 1;
     }
     
@@ -439,66 +458,34 @@ static int cmd_dep(int argc, char *argv[]) {
         return 1;
     }
     
-    char dep_id[MAX_PATH];
-    const char *basename = strrchr(dep_path, '/');
-    if (basename != NULL) {
-        basename++;
-    } else {
-        basename = dep_path;
-    }
-    snprintf(dep_id, sizeof(dep_id), "%.*s", (int)(strlen(basename) - 3), basename);
+    const char *basename1 = strrchr(resolved_path, '/');
+    basename1 = basename1 ? basename1 + 1 : resolved_path;
+    char ticket_id[MAX_PATH];
+    snprintf(ticket_id, sizeof(ticket_id), "%.*s", (int)(strlen(basename1) - 3), basename1);
     
-    FILE *file = fopen(resolved_path, "r");
-    if (file == NULL) {
+    const char *basename2 = strrchr(dep_path, '/');
+    basename2 = basename2 ? basename2 + 1 : dep_path;
+    char dep_id[MAX_PATH];
+    snprintf(dep_id, sizeof(dep_id), "%.*s", (int)(strlen(basename2) - 3), basename2);
+    
+    char existing_deps[MAX_DEPS][MAX_PATH];
+    int dep_count = 0;
+    
+    if (parse_deps(resolved_path, existing_deps, &dep_count) != 0) {
         fprintf(stderr, "Error: cannot read ticket file\n");
         return 1;
     }
     
-    char temp_path[MAX_PATH];
-    snprintf(temp_path, sizeof(temp_path), "%s.tmp", resolved_path);
-    FILE *temp_file = fopen(temp_path, "w");
-    if (temp_file == NULL) {
-        fclose(file);
-        fprintf(stderr, "Error: cannot write temp file\n");
+    if (has_dep(existing_deps, dep_count, dep_id)) {
+        printf("Dependency already exists\n");
+        return 0;
+    }
+    
+    if (add_dep_to_file(resolved_path, dep_id) != 0) {
         return 1;
     }
     
-    char line[1024];
-    int in_frontmatter = 0;
-    while (fgets(line, sizeof(line), file) != NULL) {
-        if (strcmp(line, "---\n") == 0) {
-            fprintf(temp_file, "%s", line);
-            in_frontmatter = !in_frontmatter;
-            continue;
-        }
-        
-        if (in_frontmatter && strncmp(line, "deps:", 5) == 0) {
-            char *bracket = strchr(line, '[');
-            if (bracket != NULL) {
-                char *end = strchr(bracket, ']');
-                if (end != NULL) {
-                    *end = '\0';
-                    if (bracket[1] == ']' || bracket[1] == '\0') {
-                        fprintf(temp_file, "deps: [%s]\n", dep_id);
-                    } else {
-                        fprintf(temp_file, "%s, %s]\n", line, dep_id);
-                    }
-                    continue;
-                }
-            }
-        }
-        fprintf(temp_file, "%s", line);
-    }
-    
-    fclose(file);
-    fclose(temp_file);
-    
-    if (rename(temp_path, resolved_path) != 0) {
-        fprintf(stderr, "Error: cannot update ticket file\n");
-        unlink(temp_path);
-        return 1;
-    }
-    
+    printf("Added dependency: %s -> %s\n", ticket_id, dep_id);
     return 0;
 }
 
@@ -687,6 +674,210 @@ static int remove_link_from_file(const char *file_path, const char *link_id) {
             for (int i = 0; i < link_count; i++) {
                 if (i > 0) fprintf(temp_file, ", ");
                 fprintf(temp_file, "%s", existing_links[i]);
+            }
+            fprintf(temp_file, "]\n");
+            continue;
+        }
+        fprintf(temp_file, "%s", line);
+    }
+    
+    fclose(file);
+    fclose(temp_file);
+    
+    if (rename(temp_path, file_path) != 0) {
+        fprintf(stderr, "Error: cannot update ticket file\n");
+        unlink(temp_path);
+        return 1;
+    }
+    
+    return 0;
+}
+
+static int parse_deps(const char *file_path, char deps[MAX_DEPS][MAX_PATH], int *dep_count) {
+    FILE *file = fopen(file_path, "r");
+    if (file == NULL) {
+        return 1;
+    }
+    
+    *dep_count = 0;
+    char line[1024];
+    int in_frontmatter = 0;
+    
+    while (fgets(line, sizeof(line), file) != NULL) {
+        if (strcmp(line, "---\n") == 0) {
+            in_frontmatter = !in_frontmatter;
+            continue;
+        }
+        
+        if (in_frontmatter && strncmp(line, "deps:", 5) == 0) {
+            char *bracket = strchr(line, '[');
+            if (bracket != NULL) {
+                char *end = strchr(bracket, ']');
+                if (end != NULL) {
+                    *end = '\0';
+                    bracket++;
+                    if (*bracket != '\0' && *bracket != ']') {
+                        char *token = strtok(bracket, ",");
+                        while (token != NULL && *dep_count < MAX_DEPS) {
+                            while (*token == ' ') token++;
+                            char *token_end = token + strlen(token) - 1;
+                            while (token_end > token && (*token_end == ' ' || *token_end == '\n')) {
+                                *token_end = '\0';
+                                token_end--;
+                            }
+                            if (*token != '\0') {
+                                strncpy(deps[*dep_count], token, MAX_PATH - 1);
+                                deps[*dep_count][MAX_PATH - 1] = '\0';
+                                (*dep_count)++;
+                            }
+                            token = strtok(NULL, ",");
+                        }
+                    }
+                }
+            }
+            break;
+        }
+    }
+    
+    fclose(file);
+    return 0;
+}
+
+static int has_dep(char deps[MAX_DEPS][MAX_PATH], int dep_count, const char *dep_id) {
+    for (int i = 0; i < dep_count; i++) {
+        if (strcmp(deps[i], dep_id) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int add_dep_to_file(const char *file_path, const char *dep_id) {
+    char existing_deps[MAX_DEPS][MAX_PATH];
+    int dep_count = 0;
+    
+    if (parse_deps(file_path, existing_deps, &dep_count) != 0) {
+        fprintf(stderr, "Error: cannot read ticket file\n");
+        return 1;
+    }
+    
+    if (has_dep(existing_deps, dep_count, dep_id)) {
+        return 0;
+    }
+    
+    FILE *file = fopen(file_path, "r");
+    if (file == NULL) {
+        fprintf(stderr, "Error: cannot read ticket file\n");
+        return 1;
+    }
+    
+    char temp_path[MAX_PATH];
+    snprintf(temp_path, sizeof(temp_path), "%s.tmp", file_path);
+    FILE *temp_file = fopen(temp_path, "w");
+    if (temp_file == NULL) {
+        fclose(file);
+        fprintf(stderr, "Error: cannot write temp file\n");
+        return 1;
+    }
+    
+    char line[1024];
+    int in_frontmatter = 0;
+    while (fgets(line, sizeof(line), file) != NULL) {
+        if (strcmp(line, "---\n") == 0) {
+            fprintf(temp_file, "%s", line);
+            in_frontmatter = !in_frontmatter;
+            continue;
+        }
+        
+        if (in_frontmatter && strncmp(line, "deps:", 5) == 0) {
+            char *bracket = strchr(line, '[');
+            if (bracket != NULL) {
+                char *end = strchr(bracket, ']');
+                if (end != NULL) {
+                    *end = '\0';
+                    if (bracket[1] == ']' || bracket[1] == '\0') {
+                        fprintf(temp_file, "deps: [%s]\n", dep_id);
+                    } else {
+                        fprintf(temp_file, "%s, %s]\n", line, dep_id);
+                    }
+                    continue;
+                }
+            }
+        }
+        fprintf(temp_file, "%s", line);
+    }
+    
+    fclose(file);
+    fclose(temp_file);
+    
+    if (rename(temp_path, file_path) != 0) {
+        fprintf(stderr, "Error: cannot update ticket file\n");
+        unlink(temp_path);
+        return 1;
+    }
+    
+    return 0;
+}
+
+static int remove_dep_from_file(const char *file_path, const char *dep_id) {
+    FILE *file = fopen(file_path, "r");
+    if (file == NULL) {
+        fprintf(stderr, "Error: cannot read ticket file\n");
+        return 1;
+    }
+    
+    char temp_path[MAX_PATH];
+    snprintf(temp_path, sizeof(temp_path), "%s.tmp", file_path);
+    FILE *temp_file = fopen(temp_path, "w");
+    if (temp_file == NULL) {
+        fclose(file);
+        fprintf(stderr, "Error: cannot write temp file\n");
+        return 1;
+    }
+    
+    char line[1024];
+    int in_frontmatter = 0;
+    while (fgets(line, sizeof(line), file) != NULL) {
+        if (strcmp(line, "---\n") == 0) {
+            fprintf(temp_file, "%s", line);
+            in_frontmatter = !in_frontmatter;
+            continue;
+        }
+        
+        if (in_frontmatter && strncmp(line, "deps:", 5) == 0) {
+            char existing_deps[MAX_DEPS][MAX_PATH];
+            int dep_count = 0;
+            
+            char *bracket = strchr(line, '[');
+            if (bracket != NULL) {
+                char *end = strchr(bracket, ']');
+                if (end != NULL) {
+                    *end = '\0';
+                    bracket++;
+                    if (*bracket != '\0' && *bracket != ']') {
+                        char *token = strtok(bracket, ",");
+                        while (token != NULL && dep_count < MAX_DEPS) {
+                            while (*token == ' ') token++;
+                            char *token_end = token + strlen(token) - 1;
+                            while (token_end > token && (*token_end == ' ' || *token_end == '\n')) {
+                                *token_end = '\0';
+                                token_end--;
+                            }
+                            if (*token != '\0' && strcmp(token, dep_id) != 0) {
+                                strncpy(existing_deps[dep_count], token, MAX_PATH - 1);
+                                existing_deps[dep_count][MAX_PATH - 1] = '\0';
+                                dep_count++;
+                            }
+                            token = strtok(NULL, ",");
+                        }
+                    }
+                }
+            }
+            
+            fprintf(temp_file, "deps: [");
+            for (int i = 0; i < dep_count; i++) {
+                if (i > 0) fprintf(temp_file, ", ");
+                fprintf(temp_file, "%s", existing_deps[i]);
             }
             fprintf(temp_file, "]\n");
             continue;
@@ -900,6 +1091,349 @@ static int cmd_add_note(int argc, char *argv[]) {
     return 0;
 }
 
+static int cmd_undep(int argc, char *argv[]) {
+    if (argc < 3) {
+        fprintf(stderr, "Usage: ticket undep <id> <dependency-id>\n");
+        return 1;
+    }
+    
+    char resolved_path[MAX_PATH];
+    if (resolve_ticket_id(argv[1], resolved_path, sizeof(resolved_path)) != 0) {
+        return 1;
+    }
+    
+    char dep_path[MAX_PATH];
+    if (resolve_ticket_id(argv[2], dep_path, sizeof(dep_path)) != 0) {
+        return 1;
+    }
+    
+    const char *basename1 = strrchr(resolved_path, '/');
+    basename1 = basename1 ? basename1 + 1 : resolved_path;
+    char ticket_id[MAX_PATH];
+    snprintf(ticket_id, sizeof(ticket_id), "%.*s", (int)(strlen(basename1) - 3), basename1);
+    
+    const char *basename2 = strrchr(dep_path, '/');
+    basename2 = basename2 ? basename2 + 1 : dep_path;
+    char dep_id[MAX_PATH];
+    snprintf(dep_id, sizeof(dep_id), "%.*s", (int)(strlen(basename2) - 3), basename2);
+    
+    char existing_deps[MAX_DEPS][MAX_PATH];
+    int dep_count = 0;
+    
+    if (parse_deps(resolved_path, existing_deps, &dep_count) != 0) {
+        fprintf(stderr, "Error: cannot read ticket file\n");
+        return 1;
+    }
+    
+    if (!has_dep(existing_deps, dep_count, dep_id)) {
+        printf("Dependency not found\n");
+        return 1;
+    }
+    
+    if (remove_dep_from_file(resolved_path, dep_id) != 0) {
+        return 1;
+    }
+    
+    printf("Removed dependency: %s -/-> %s\n", ticket_id, dep_id);
+    return 0;
+}
+
+typedef struct {
+    char id[MAX_PATH];
+    char status[64];
+    char title[256];
+    char deps[MAX_DEPS][MAX_PATH];
+    int dep_count;
+    int subtree_depth;
+    int visited;
+} Ticket;
+
+static int load_all_tickets(Ticket *tickets, int *ticket_count) {
+    DIR *dir = opendir(TICKETS_DIR);
+    if (dir == NULL) {
+        return 1;
+    }
+    
+    *ticket_count = 0;
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL && *ticket_count < MAX_TICKETS) {
+        if (entry->d_name[0] == '.') {
+            continue;
+        }
+        
+        size_t len = strlen(entry->d_name);
+        if (len < 4 || strcmp(entry->d_name + len - 3, ".md") != 0) {
+            continue;
+        }
+        
+        char file_path[MAX_PATH];
+        snprintf(file_path, sizeof(file_path), "%s/%s", TICKETS_DIR, entry->d_name);
+        
+        FILE *file = fopen(file_path, "r");
+        if (file == NULL) {
+            continue;
+        }
+        
+        Ticket *t = &tickets[*ticket_count];
+        snprintf(t->id, sizeof(t->id), "%.*s", (int)(len - 3), entry->d_name);
+        strcpy(t->status, "open");
+        strcpy(t->title, "");
+        t->dep_count = 0;
+        t->subtree_depth = 0;
+        t->visited = 0;
+        
+        char line[1024];
+        int in_frontmatter = 0;
+        int got_title = 0;
+        
+        while (fgets(line, sizeof(line), file) != NULL) {
+            if (strcmp(line, "---\n") == 0) {
+                in_frontmatter = !in_frontmatter;
+                continue;
+            }
+            
+            if (in_frontmatter) {
+                if (strncmp(line, "status:", 7) == 0) {
+                    sscanf(line, "status: %63s", t->status);
+                } else if (strncmp(line, "deps:", 5) == 0) {
+                    char *bracket = strchr(line, '[');
+                    if (bracket != NULL) {
+                        char *end = strchr(bracket, ']');
+                        if (end != NULL) {
+                            *end = '\0';
+                            bracket++;
+                            if (*bracket != '\0' && *bracket != ']') {
+                                char *token = strtok(bracket, ",");
+                                while (token != NULL && t->dep_count < MAX_DEPS) {
+                                    while (*token == ' ') token++;
+                                    char *token_end = token + strlen(token) - 1;
+                                    while (token_end > token && *token_end == ' ') {
+                                        *token_end = '\0';
+                                        token_end--;
+                                    }
+                                    if (*token != '\0') {
+                                        strncpy(t->deps[t->dep_count], token, MAX_PATH - 1);
+                                        t->deps[t->dep_count][MAX_PATH - 1] = '\0';
+                                        t->dep_count++;
+                                    }
+                                    token = strtok(NULL, ",");
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if (!got_title && strncmp(line, "# ", 2) == 0) {
+                size_t title_len = strlen(line + 2);
+                if (title_len > 0 && line[2 + title_len - 1] == '\n') {
+                    title_len--;
+                }
+                snprintf(t->title, sizeof(t->title), "%.*s", (int)title_len, line + 2);
+                got_title = 1;
+            }
+        }
+        
+        fclose(file);
+        (*ticket_count)++;
+    }
+    
+    closedir(dir);
+    return 0;
+}
+
+static int find_ticket(Ticket *tickets, int ticket_count, const char *id) {
+    for (int i = 0; i < ticket_count; i++) {
+        if (strcmp(tickets[i].id, id) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static int compute_subtree_depth(Ticket *tickets, int ticket_count, int idx, int path_mask[], int path_len) {
+    if (idx < 0 || idx >= ticket_count) {
+        return 0;
+    }
+    
+    for (int i = 0; i < path_len; i++) {
+        if (path_mask[i] == idx) {
+            return 0;
+        }
+    }
+    
+    if (tickets[idx].visited) {
+        return tickets[idx].subtree_depth;
+    }
+    
+    int max_depth = 0;
+    path_mask[path_len] = idx;
+    
+    for (int i = 0; i < tickets[idx].dep_count; i++) {
+        int dep_idx = find_ticket(tickets, ticket_count, tickets[idx].deps[i]);
+        if (dep_idx >= 0) {
+            int depth = compute_subtree_depth(tickets, ticket_count, dep_idx, path_mask, path_len + 1);
+            if (depth + 1 > max_depth) {
+                max_depth = depth + 1;
+            }
+        }
+    }
+    
+    tickets[idx].subtree_depth = max_depth;
+    tickets[idx].visited = 1;
+    return max_depth;
+}
+
+static void print_dep_tree_recursive(Ticket *tickets, int ticket_count, int idx, 
+                                     const char *prefix, int is_last, int visited[], 
+                                     int visited_count, int full_mode) {
+    if (idx < 0) return;
+    
+    for (int i = 0; i < visited_count; i++) {
+        if (visited[i] == idx) {
+            return;
+        }
+    }
+    
+    Ticket *t = &tickets[idx];
+    
+    if (strcmp(prefix, "") == 0) {
+        printf("%s [%s] %s\n", t->id, t->status, t->title);
+    } else {
+        const char *connector = is_last ? "└── " : "├── ";
+        printf("%s%s%s [%s] %s\n", prefix, connector, t->id, t->status, t->title);
+    }
+    
+    visited[visited_count] = idx;
+    visited_count++;
+    
+    if (t->dep_count == 0) {
+        return;
+    }
+    
+    int dep_indices[MAX_DEPS];
+    int sorted_positions[MAX_DEPS];
+    for (int i = 0; i < t->dep_count; i++) {
+        dep_indices[i] = find_ticket(tickets, ticket_count, t->deps[i]);
+        sorted_positions[i] = i;
+    }
+    
+    for (int i = 0; i < t->dep_count - 1; i++) {
+        for (int j = i + 1; j < t->dep_count; j++) {
+            int idx_i = dep_indices[sorted_positions[i]];
+            int idx_j = dep_indices[sorted_positions[j]];
+            
+            if (idx_i < 0 && idx_j >= 0) {
+                int temp = sorted_positions[i];
+                sorted_positions[i] = sorted_positions[j];
+                sorted_positions[j] = temp;
+            } else if (idx_i >= 0 && idx_j >= 0) {
+                Ticket *t_i = &tickets[idx_i];
+                Ticket *t_j = &tickets[idx_j];
+                
+                int should_swap = 0;
+                if (t_i->subtree_depth != t_j->subtree_depth) {
+                    should_swap = t_i->subtree_depth < t_j->subtree_depth;
+                } else {
+                    should_swap = strcmp(t_i->id, t_j->id) > 0;
+                }
+                
+                if (should_swap) {
+                    int temp = sorted_positions[i];
+                    sorted_positions[i] = sorted_positions[j];
+                    sorted_positions[j] = temp;
+                }
+            }
+        }
+    }
+    
+    char new_prefix[MAX_PATH * 2];
+    for (int i = 0; i < t->dep_count; i++) {
+        int dep_pos = sorted_positions[i];
+        int dep_idx = dep_indices[dep_pos];
+        
+        if (dep_idx < 0) continue;
+        
+        int is_last_child = (i == t->dep_count - 1);
+        if (!full_mode) {
+            is_last_child = 1;
+            for (int j = i + 1; j < t->dep_count; j++) {
+                if (dep_indices[sorted_positions[j]] >= 0) {
+                    is_last_child = 0;
+                    break;
+                }
+            }
+        }
+        
+        if (strcmp(prefix, "") == 0) {
+            strcpy(new_prefix, "");
+        } else if (is_last) {
+            snprintf(new_prefix, sizeof(new_prefix), "%s    ", prefix);
+        } else {
+            snprintf(new_prefix, sizeof(new_prefix), "%s│   ", prefix);
+        }
+        
+        print_dep_tree_recursive(tickets, ticket_count, dep_idx, new_prefix, 
+                                is_last_child, visited, visited_count, full_mode);
+    }
+}
+
+static int cmd_dep_tree(int argc, char *argv[]) {
+    int full_mode = 0;
+    const char *root_id = NULL;
+    
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--full") == 0) {
+            full_mode = 1;
+        } else {
+            root_id = argv[i];
+        }
+    }
+    
+    if (root_id == NULL) {
+        fprintf(stderr, "Usage: ticket dep tree [--full] <id>\n");
+        return 1;
+    }
+    
+    Ticket tickets[MAX_TICKETS];
+    int ticket_count = 0;
+    
+    if (load_all_tickets(tickets, &ticket_count) != 0) {
+        fprintf(stderr, "Error: cannot load tickets\n");
+        return 1;
+    }
+    
+    int root_idx = -1;
+    int match_count = 0;
+    for (int i = 0; i < ticket_count; i++) {
+        if (strstr(tickets[i].id, root_id) != NULL) {
+            root_idx = i;
+            match_count++;
+        }
+    }
+    
+    if (match_count == 0) {
+        fprintf(stderr, "Error: ticket '%s' not found\n", root_id);
+        return 1;
+    }
+    
+    if (match_count > 1) {
+        fprintf(stderr, "Error: ambiguous ID '%s' matches multiple tickets\n", root_id);
+        return 1;
+    }
+    
+    int path_mask[MAX_TICKETS];
+    for (int i = 0; i < ticket_count; i++) {
+        tickets[i].visited = 0;
+    }
+    for (int i = 0; i < ticket_count; i++) {
+        compute_subtree_depth(tickets, ticket_count, i, path_mask, 0);
+    }
+    
+    int visited[MAX_TICKETS];
+    print_dep_tree_recursive(tickets, ticket_count, root_idx, "", 1, visited, 0, full_mode);
+    
+    return 0;
+}
+
 static int cmd_query(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -940,6 +1474,8 @@ int main(int argc, char *argv[]) {
         return cmd_reopen(argc - 1, &argv[1]);
     } else if (strcmp(command, "dep") == 0) {
         return cmd_dep(argc - 1, &argv[1]);
+    } else if (strcmp(command, "undep") == 0) {
+        return cmd_undep(argc - 1, &argv[1]);
     } else if (strcmp(command, "link") == 0) {
         return cmd_link(argc - 1, &argv[1]);
     } else if (strcmp(command, "unlink") == 0) {

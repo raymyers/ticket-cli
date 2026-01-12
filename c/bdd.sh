@@ -22,3 +22,4 @@ behave ticket_creation.feature
 behave id_resolution.feature
 behave ticket_links.feature
 behave ticket_notes.feature
+behave ticket_dependencies.feature
