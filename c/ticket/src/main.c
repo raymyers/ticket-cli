@@ -352,16 +352,23 @@ static int cmd_show(int argc, char *argv[])
     }
     snprintf(target_id, sizeof(target_id), "%.*s", (int)(strlen(base_name) - 3), base_name);
 
-    Ticket tickets[MAX_TICKETS];
+    Ticket *tickets = malloc(sizeof(Ticket) * MAX_TICKETS);
+    if (tickets == NULL) {
+        fprintf(stderr, "Error: out of memory\n");
+        return 1;
+    }
+
     int ticket_count = 0;
     if (load_all_tickets(tickets, &ticket_count) != 0) {
         fprintf(stderr, "Error: cannot load tickets\n");
+        free(tickets);
         return 1;
     }
 
     int target_idx = find_ticket(tickets, ticket_count, target_id);
     if (target_idx < 0) {
         fprintf(stderr, "Error: ticket '%s' not found\n", argv[1]);
+        free(tickets);
         return 1;
     }
 
@@ -442,6 +449,7 @@ static int cmd_show(int argc, char *argv[])
     FILE *file = fopen(resolved_path, "r");
     if (file == NULL) {
         fprintf(stderr, "Error: cannot read ticket file\n");
+        free(tickets);
         return 1;
     }
 
@@ -496,6 +504,7 @@ static int cmd_show(int argc, char *argv[])
         }
     }
 
+    free(tickets);
     return 0;
 }
 
@@ -1571,10 +1580,16 @@ static int ticket_is_blocked(const Ticket *ticket, Ticket *all_tickets, int tick
 
 static int cmd_ls(int argc, char *argv[])
 {
-    Ticket tickets[MAX_TICKETS];
+    Ticket *tickets = malloc(sizeof(Ticket) * MAX_TICKETS);
+    if (tickets == NULL) {
+        fprintf(stderr, "Error: out of memory\n");
+        return 1;
+    }
+
     int ticket_count = 0;
 
     if (load_all_tickets(tickets, &ticket_count) != 0) {
+        free(tickets);
         return 0;
     }
 
@@ -1610,6 +1625,7 @@ static int cmd_ls(int argc, char *argv[])
         printf("\n");
     }
 
+    free(tickets);
     return 0;
 }
 
@@ -1623,14 +1639,26 @@ static int cmd_ready(int argc, char *argv[])
     (void)argc;
     (void)argv;
 
-    Ticket tickets[MAX_TICKETS];
+    Ticket *tickets = malloc(sizeof(Ticket) * MAX_TICKETS);
+    if (tickets == NULL) {
+        fprintf(stderr, "Error: out of memory\n");
+        return 1;
+    }
+
     int ticket_count = 0;
 
     if (load_all_tickets(tickets, &ticket_count) != 0) {
+        free(tickets);
         return 0;
     }
 
-    Ticket ready_tickets[MAX_TICKETS];
+    Ticket *ready_tickets = malloc(sizeof(Ticket) * MAX_TICKETS);
+    if (ready_tickets == NULL) {
+        fprintf(stderr, "Error: out of memory\n");
+        free(tickets);
+        return 1;
+    }
+
     int ready_count = 0;
 
     for (int i = 0; i < ticket_count; i++) {
@@ -1646,6 +1674,8 @@ static int cmd_ready(int argc, char *argv[])
         printf("%-8s [P%d][%s] - %s\n", t->id, t->priority, t->status, t->title);
     }
 
+    free(ready_tickets);
+    free(tickets);
     return 0;
 }
 
@@ -1654,14 +1684,26 @@ static int cmd_blocked(int argc, char *argv[])
     (void)argc;
     (void)argv;
 
-    Ticket tickets[MAX_TICKETS];
+    Ticket *tickets = malloc(sizeof(Ticket) * MAX_TICKETS);
+    if (tickets == NULL) {
+        fprintf(stderr, "Error: out of memory\n");
+        return 1;
+    }
+
     int ticket_count = 0;
 
     if (load_all_tickets(tickets, &ticket_count) != 0) {
+        free(tickets);
         return 0;
     }
 
-    Ticket blocked_tickets[MAX_TICKETS];
+    Ticket *blocked_tickets = malloc(sizeof(Ticket) * MAX_TICKETS);
+    if (blocked_tickets == NULL) {
+        fprintf(stderr, "Error: out of memory\n");
+        free(tickets);
+        return 1;
+    }
+
     int blocked_count = 0;
 
     for (int i = 0; i < ticket_count; i++) {
@@ -1690,6 +1732,8 @@ static int cmd_blocked(int argc, char *argv[])
         printf("]\n");
     }
 
+    free(blocked_tickets);
+    free(tickets);
     return 0;
 }
 
@@ -1949,11 +1993,17 @@ static int cmd_dep_tree(int argc, char *argv[])
         return 1;
     }
 
-    Ticket tickets[MAX_TICKETS];
+    Ticket *tickets = malloc(sizeof(Ticket) * MAX_TICKETS);
+    if (tickets == NULL) {
+        fprintf(stderr, "Error: out of memory\n");
+        return 1;
+    }
+
     int ticket_count = 0;
 
     if (load_all_tickets(tickets, &ticket_count) != 0) {
         fprintf(stderr, "Error: cannot load tickets\n");
+        free(tickets);
         return 1;
     }
 
@@ -1968,11 +2018,13 @@ static int cmd_dep_tree(int argc, char *argv[])
 
     if (match_count == 0) {
         fprintf(stderr, "Error: ticket '%s' not found\n", root_id);
+        free(tickets);
         return 1;
     }
 
     if (match_count > 1) {
         fprintf(stderr, "Error: ambiguous ID '%s' matches multiple tickets\n", root_id);
+        free(tickets);
         return 1;
     }
 
@@ -1987,6 +2039,7 @@ static int cmd_dep_tree(int argc, char *argv[])
     int visited[MAX_TICKETS];
     print_dep_tree_recursive(tickets, ticket_count, root_idx, "", 1, visited, 0, full_mode);
 
+    free(tickets);
     return 0;
 }
 
