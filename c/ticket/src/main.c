@@ -338,12 +338,6 @@ static int cmd_show(int argc, char *argv[]) {
     return 0;
 }
 
-static int cmd_list(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-    return cmd_not_implemented("list");
-}
-
 static int cmd_status(int argc, char *argv[]) {
     if (argc < 3) {
         fprintf(stderr, "Error: ticket ID and status required\n");
@@ -1146,6 +1140,7 @@ typedef struct {
     char title[256];
     char deps[MAX_DEPS][MAX_PATH];
     int dep_count;
+    int priority;
     int subtree_depth;
     int visited;
 } Ticket;
@@ -1181,6 +1176,7 @@ static int load_all_tickets(Ticket *tickets, int *ticket_count) {
         strcpy(t->status, "open");
         strcpy(t->title, "");
         t->dep_count = 0;
+        t->priority = 2;
         t->subtree_depth = 0;
         t->visited = 0;
         
@@ -1197,6 +1193,8 @@ static int load_all_tickets(Ticket *tickets, int *ticket_count) {
             if (in_frontmatter) {
                 if (strncmp(line, "status:", 7) == 0) {
                     sscanf(line, "status: %63s", t->status);
+                } else if (strncmp(line, "priority:", 9) == 0) {
+                    sscanf(line, "priority: %d", &t->priority);
                 } else if (strncmp(line, "deps:", 5) == 0) {
                     char *bracket = strchr(line, '[');
                     if (bracket != NULL) {
@@ -1249,6 +1247,277 @@ static int find_ticket(Ticket *tickets, int ticket_count, const char *id) {
         }
     }
     return -1;
+}
+
+static int ticket_compare_by_priority_and_id(const void *a, const void *b) {
+    const Ticket *t1 = (const Ticket *)a;
+    const Ticket *t2 = (const Ticket *)b;
+    
+    if (t1->priority != t2->priority) {
+        return t1->priority - t2->priority;
+    }
+    
+    return strcmp(t1->id, t2->id);
+}
+
+static int ticket_is_ready(const Ticket *ticket, Ticket *all_tickets, int ticket_count) {
+    if (strcmp(ticket->status, "open") != 0 && strcmp(ticket->status, "in_progress") != 0) {
+        return 0;
+    }
+    
+    for (int i = 0; i < ticket->dep_count; i++) {
+        int dep_idx = find_ticket(all_tickets, ticket_count, ticket->deps[i]);
+        if (dep_idx < 0) {
+            return 0;
+        }
+        if (strcmp(all_tickets[dep_idx].status, "closed") != 0) {
+            return 0;
+        }
+    }
+    
+    return 1;
+}
+
+static int ticket_is_blocked(const Ticket *ticket, Ticket *all_tickets, int ticket_count) {
+    if (strcmp(ticket->status, "open") != 0 && strcmp(ticket->status, "in_progress") != 0) {
+        return 0;
+    }
+    
+    if (ticket->dep_count == 0) {
+        return 0;
+    }
+    
+    for (int i = 0; i < ticket->dep_count; i++) {
+        int dep_idx = find_ticket(all_tickets, ticket_count, ticket->deps[i]);
+        if (dep_idx < 0) {
+            return 1;
+        }
+        if (strcmp(all_tickets[dep_idx].status, "closed") != 0) {
+            return 1;
+        }
+    }
+    
+    return 0;
+}
+
+static int cmd_ls(int argc, char *argv[]) {
+    Ticket tickets[MAX_TICKETS];
+    int ticket_count = 0;
+    
+    if (load_all_tickets(tickets, &ticket_count) != 0) {
+        return 0;
+    }
+    
+    char status_filter[64] = "";
+    for (int i = 1; i < argc; i++) {
+        if (strncmp(argv[i], "--status=", 9) == 0) {
+            strncpy(status_filter, argv[i] + 9, sizeof(status_filter) - 1);
+            status_filter[sizeof(status_filter) - 1] = '\0';
+        }
+    }
+    
+    qsort(tickets, ticket_count, sizeof(Ticket), ticket_compare_by_priority_and_id);
+    
+    for (int i = 0; i < ticket_count; i++) {
+        Ticket *t = &tickets[i];
+        
+        if (status_filter[0] != '\0' && strcmp(t->status, status_filter) != 0) {
+            continue;
+        }
+        
+        printf("%-8s [%s] - %s", t->id, t->status, t->title);
+        
+        if (t->dep_count > 0) {
+            printf(" <- [");
+            for (int j = 0; j < t->dep_count; j++) {
+                if (j > 0) printf(", ");
+                printf("%s", t->deps[j]);
+            }
+            printf("]");
+        }
+        
+        printf("\n");
+    }
+    
+    return 0;
+}
+
+static int cmd_list(int argc, char *argv[]) {
+    return cmd_ls(argc, argv);
+}
+
+static int cmd_ready(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+    
+    Ticket tickets[MAX_TICKETS];
+    int ticket_count = 0;
+    
+    if (load_all_tickets(tickets, &ticket_count) != 0) {
+        return 0;
+    }
+    
+    Ticket ready_tickets[MAX_TICKETS];
+    int ready_count = 0;
+    
+    for (int i = 0; i < ticket_count; i++) {
+        if (ticket_is_ready(&tickets[i], tickets, ticket_count)) {
+            ready_tickets[ready_count++] = tickets[i];
+        }
+    }
+    
+    qsort(ready_tickets, ready_count, sizeof(Ticket), ticket_compare_by_priority_and_id);
+    
+    for (int i = 0; i < ready_count; i++) {
+        Ticket *t = &ready_tickets[i];
+        printf("%-8s [P%d][%s] - %s\n", t->id, t->priority, t->status, t->title);
+    }
+    
+    return 0;
+}
+
+static int cmd_blocked(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+    
+    Ticket tickets[MAX_TICKETS];
+    int ticket_count = 0;
+    
+    if (load_all_tickets(tickets, &ticket_count) != 0) {
+        return 0;
+    }
+    
+    Ticket blocked_tickets[MAX_TICKETS];
+    int blocked_count = 0;
+    
+    for (int i = 0; i < ticket_count; i++) {
+        if (ticket_is_blocked(&tickets[i], tickets, ticket_count)) {
+            blocked_tickets[blocked_count++] = tickets[i];
+        }
+    }
+    
+    qsort(blocked_tickets, blocked_count, sizeof(Ticket), ticket_compare_by_priority_and_id);
+    
+    for (int i = 0; i < blocked_count; i++) {
+        Ticket *t = &blocked_tickets[i];
+        printf("%-8s [P%d][%s] - %s", t->id, t->priority, t->status, t->title);
+        
+        int first = 1;
+        printf(" <- [");
+        for (int j = 0; j < t->dep_count; j++) {
+            int dep_idx = find_ticket(tickets, ticket_count, t->deps[j]);
+            if (dep_idx < 0 || strcmp(tickets[dep_idx].status, "closed") != 0) {
+                if (!first) printf(", ");
+                printf("%s", t->deps[j]);
+                first = 0;
+            }
+        }
+        printf("]\n");
+    }
+    
+    return 0;
+}
+
+static int cmd_closed(int argc, char *argv[]) {
+    int limit = 20;
+    
+    for (int i = 1; i < argc; i++) {
+        if (strncmp(argv[i], "--limit=", 8) == 0) {
+            limit = atoi(argv[i] + 8);
+        }
+    }
+    
+    DIR *dir = opendir(TICKETS_DIR);
+    if (dir == NULL) {
+        return 0;
+    }
+    
+    typedef struct {
+        char path[MAX_PATH];
+        time_t mtime;
+    } FileInfo;
+    
+    FileInfo files[MAX_TICKETS];
+    int file_count = 0;
+    
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL && file_count < MAX_TICKETS) {
+        if (entry->d_name[0] == '.') continue;
+        
+        size_t len = strlen(entry->d_name);
+        if (len < 4 || strcmp(entry->d_name + len - 3, ".md") != 0) continue;
+        
+        char file_path[MAX_PATH];
+        snprintf(file_path, sizeof(file_path), "%s/%s", TICKETS_DIR, entry->d_name);
+        
+        struct stat st;
+        if (stat(file_path, &st) == 0) {
+            strncpy(files[file_count].path, file_path, MAX_PATH - 1);
+            files[file_count].path[MAX_PATH - 1] = '\0';
+            files[file_count].mtime = st.st_mtime;
+            file_count++;
+        }
+    }
+    
+    closedir(dir);
+    
+    for (int i = 0; i < file_count - 1; i++) {
+        for (int j = i + 1; j < file_count; j++) {
+            if (files[i].mtime < files[j].mtime) {
+                FileInfo temp = files[i];
+                files[i] = files[j];
+                files[j] = temp;
+            }
+        }
+    }
+    
+    int closed_count = 0;
+    int max_check = file_count < 100 ? file_count : 100;
+    
+    for (int i = 0; i < max_check && closed_count < limit; i++) {
+        FILE *file = fopen(files[i].path, "r");
+        if (file == NULL) continue;
+        
+        char ticket_id[MAX_PATH] = "";
+        char status[64] = "open";
+        char title[256] = "";
+        
+        const char *basename = strrchr(files[i].path, '/');
+        basename = basename ? basename + 1 : files[i].path;
+        size_t basename_len = strlen(basename);
+        snprintf(ticket_id, sizeof(ticket_id), "%.*s", (int)(basename_len - 3), basename);
+        
+        char line[1024];
+        int in_frontmatter = 0;
+        int got_title = 0;
+        
+        while (fgets(line, sizeof(line), file) != NULL) {
+            if (strcmp(line, "---\n") == 0) {
+                in_frontmatter = !in_frontmatter;
+                continue;
+            }
+            
+            if (in_frontmatter && strncmp(line, "status:", 7) == 0) {
+                sscanf(line, "status: %63s", status);
+            } else if (!got_title && strncmp(line, "# ", 2) == 0) {
+                size_t title_len = strlen(line + 2);
+                if (title_len > 0 && line[2 + title_len - 1] == '\n') {
+                    title_len--;
+                }
+                snprintf(title, sizeof(title), "%.*s", (int)title_len, line + 2);
+                got_title = 1;
+            }
+        }
+        
+        fclose(file);
+        
+        if (strcmp(status, "closed") == 0 || strcmp(status, "done") == 0) {
+            printf("%-8s [%s] - %s\n", ticket_id, status, title);
+            closed_count++;
+        }
+    }
+    
+    return 0;
 }
 
 static int compute_subtree_depth(Ticket *tickets, int ticket_count, int idx, int path_mask[], int path_len) {
@@ -1685,6 +1954,14 @@ int main(int argc, char *argv[]) {
         return cmd_show(argc - 1, &argv[1]);
     } else if (strcmp(command, "list") == 0) {
         return cmd_list(argc - 1, &argv[1]);
+    } else if (strcmp(command, "ls") == 0) {
+        return cmd_ls(argc - 1, &argv[1]);
+    } else if (strcmp(command, "ready") == 0) {
+        return cmd_ready(argc - 1, &argv[1]);
+    } else if (strcmp(command, "blocked") == 0) {
+        return cmd_blocked(argc - 1, &argv[1]);
+    } else if (strcmp(command, "closed") == 0) {
+        return cmd_closed(argc - 1, &argv[1]);
     } else if (strcmp(command, "status") == 0) {
         return cmd_status(argc - 1, &argv[1]);
     } else if (strcmp(command, "start") == 0) {
