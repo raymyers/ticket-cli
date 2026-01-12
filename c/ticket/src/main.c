@@ -17,6 +17,23 @@
 #define MAX_DEPS 100
 #define MAX_TICKETS 1000
 
+typedef struct {
+    char id[MAX_PATH];
+    char status[64];
+    char title[256];
+    char deps[MAX_DEPS][MAX_PATH];
+    int dep_count;
+    char links[MAX_LINKS][MAX_PATH];
+    int link_count;
+    char parent[MAX_PATH];
+    int priority;
+    int subtree_depth;
+    int visited;
+} Ticket;
+
+static int load_all_tickets(Ticket *tickets, int *ticket_count);
+static int find_ticket(Ticket *tickets, int ticket_count, const char *id);
+
 static void print_usage(const char *program_name)
 {
     printf("Ticket CLI - C Implementation\n");
@@ -332,6 +349,102 @@ static int cmd_show(int argc, char *argv[])
         return 1;
     }
 
+    char target_id[MAX_PATH];
+    const char *base_name = strrchr(resolved_path, '/');
+    if (base_name == NULL) {
+        base_name = resolved_path;
+    } else {
+        base_name++;
+    }
+    snprintf(target_id, sizeof(target_id), "%.*s", (int)(strlen(base_name) - 3), base_name);
+
+    Ticket tickets[MAX_TICKETS];
+    int ticket_count = 0;
+    if (load_all_tickets(tickets, &ticket_count) != 0) {
+        fprintf(stderr, "Error: cannot load tickets\n");
+        return 1;
+    }
+
+    int target_idx = find_ticket(tickets, ticket_count, target_id);
+    if (target_idx < 0) {
+        fprintf(stderr, "Error: ticket '%s' not found\n", argv[1]);
+        return 1;
+    }
+
+    Ticket *target = &tickets[target_idx];
+
+    struct {
+        char id[MAX_PATH];
+        char status[64];
+        char title[256];
+    } blockers[MAX_DEPS];
+    int blocker_count = 0;
+
+    struct {
+        char id[MAX_PATH];
+        char status[64];
+        char title[256];
+    } blocking[MAX_TICKETS];
+    int blocking_count = 0;
+
+    struct {
+        char id[MAX_PATH];
+        char status[64];
+        char title[256];
+    } children[MAX_TICKETS];
+    int children_count = 0;
+
+    struct {
+        char id[MAX_PATH];
+        char status[64];
+        char title[256];
+    } linked[MAX_LINKS];
+    int linked_count = 0;
+
+    for (int i = 0; i < target->dep_count; i++) {
+        int dep_idx = find_ticket(tickets, ticket_count, target->deps[i]);
+        if (dep_idx >= 0) {
+            Ticket *dep = &tickets[dep_idx];
+            if (strcmp(dep->status, "closed") != 0) {
+                strcpy(blockers[blocker_count].id, dep->id);
+                strcpy(blockers[blocker_count].status, dep->status);
+                strcpy(blockers[blocker_count].title, dep->title);
+                blocker_count++;
+            }
+        }
+    }
+
+    for (int i = 0; i < ticket_count; i++) {
+        Ticket *t = &tickets[i];
+        for (int j = 0; j < t->dep_count; j++) {
+            if (strcmp(t->deps[j], target_id) == 0 && strcmp(t->status, "closed") != 0) {
+                strcpy(blocking[blocking_count].id, t->id);
+                strcpy(blocking[blocking_count].status, t->status);
+                strcpy(blocking[blocking_count].title, t->title);
+                blocking_count++;
+                break;
+            }
+        }
+
+        if (strcmp(t->parent, target_id) == 0) {
+            strcpy(children[children_count].id, t->id);
+            strcpy(children[children_count].status, t->status);
+            strcpy(children[children_count].title, t->title);
+            children_count++;
+        }
+    }
+
+    for (int i = 0; i < target->link_count; i++) {
+        int link_idx = find_ticket(tickets, ticket_count, target->links[i]);
+        if (link_idx >= 0) {
+            Ticket *link = &tickets[link_idx];
+            strcpy(linked[linked_count].id, link->id);
+            strcpy(linked[linked_count].status, link->status);
+            strcpy(linked[linked_count].title, link->title);
+            linked_count++;
+        }
+    }
+
     FILE *file = fopen(resolved_path, "r");
     if (file == NULL) {
         fprintf(stderr, "Error: cannot read ticket file\n");
@@ -339,11 +452,56 @@ static int cmd_show(int argc, char *argv[])
     }
 
     char line[1024];
+    int in_frontmatter = 0;
     while (fgets(line, sizeof(line), file) != NULL) {
-        printf("%s", line);
+        if (strcmp(line, "---\n") == 0) {
+            printf("%s", line);
+            in_frontmatter = !in_frontmatter;
+            continue;
+        }
+
+        if (in_frontmatter && strncmp(line, "parent:", 7) == 0 && target->parent[0] != '\0') {
+            int parent_idx = find_ticket(tickets, ticket_count, target->parent);
+            if (parent_idx >= 0) {
+                printf("%s  # %s\n", line, tickets[parent_idx].title);
+            } else {
+                printf("%s", line);
+            }
+        } else {
+            printf("%s", line);
+        }
     }
 
     fclose(file);
+
+    if (blocker_count > 0) {
+        printf("\n## Blockers\n\n");
+        for (int i = 0; i < blocker_count; i++) {
+            printf("- %s [%s] %s\n", blockers[i].id, blockers[i].status, blockers[i].title);
+        }
+    }
+
+    if (blocking_count > 0) {
+        printf("\n## Blocking\n\n");
+        for (int i = 0; i < blocking_count; i++) {
+            printf("- %s [%s] %s\n", blocking[i].id, blocking[i].status, blocking[i].title);
+        }
+    }
+
+    if (children_count > 0) {
+        printf("\n## Children\n\n");
+        for (int i = 0; i < children_count; i++) {
+            printf("- %s [%s] %s\n", children[i].id, children[i].status, children[i].title);
+        }
+    }
+
+    if (linked_count > 0) {
+        printf("\n## Linked\n\n");
+        for (int i = 0; i < linked_count; i++) {
+            printf("- %s [%s] %s\n", linked[i].id, linked[i].status, linked[i].title);
+        }
+    }
+
     return 0;
 }
 
@@ -1169,17 +1327,6 @@ static int cmd_undep(int argc, char *argv[])
     return 0;
 }
 
-typedef struct {
-    char id[MAX_PATH];
-    char status[64];
-    char title[256];
-    char deps[MAX_DEPS][MAX_PATH];
-    int dep_count;
-    int priority;
-    int subtree_depth;
-    int visited;
-} Ticket;
-
 static int load_all_tickets(Ticket *tickets, int *ticket_count)
 {
     DIR *dir = opendir(TICKETS_DIR);
@@ -1212,6 +1359,8 @@ static int load_all_tickets(Ticket *tickets, int *ticket_count)
         strcpy(t->status, "open");
         strcpy(t->title, "");
         t->dep_count = 0;
+        t->link_count = 0;
+        t->parent[0] = '\0';
         t->priority = 2;
         t->subtree_depth = 0;
         t->visited = 0;
@@ -1231,6 +1380,16 @@ static int load_all_tickets(Ticket *tickets, int *ticket_count)
                     sscanf(line, "status: %63s", t->status);
                 } else if (strncmp(line, "priority:", 9) == 0) {
                     sscanf(line, "priority: %d", &t->priority);
+                } else if (strncmp(line, "parent:", 7) == 0) {
+                    char *val = line + 7;
+                    while (*val == ' ')
+                        val++;
+                    strncpy(t->parent, val, sizeof(t->parent) - 1);
+                    t->parent[sizeof(t->parent) - 1] = '\0';
+                    size_t parent_len = strlen(t->parent);
+                    if (parent_len > 0 && t->parent[parent_len - 1] == '\n') {
+                        t->parent[parent_len - 1] = '\0';
+                    }
                 } else if (strncmp(line, "deps:", 5) == 0) {
                     char *bracket = strchr(line, '[');
                     if (bracket != NULL) {
@@ -1252,6 +1411,33 @@ static int load_all_tickets(Ticket *tickets, int *ticket_count)
                                         strncpy(t->deps[t->dep_count], token, MAX_PATH - 1);
                                         t->deps[t->dep_count][MAX_PATH - 1] = '\0';
                                         t->dep_count++;
+                                    }
+                                    token = strtok(NULL, ",");
+                                }
+                            }
+                        }
+                    }
+                } else if (strncmp(line, "links:", 6) == 0) {
+                    char *bracket = strchr(line, '[');
+                    if (bracket != NULL) {
+                        char *end = strchr(bracket, ']');
+                        if (end != NULL) {
+                            *end = '\0';
+                            bracket++;
+                            if (*bracket != '\0' && *bracket != ']') {
+                                char *token = strtok(bracket, ",");
+                                while (token != NULL && t->link_count < MAX_LINKS) {
+                                    while (*token == ' ')
+                                        token++;
+                                    char *token_end = token + strlen(token) - 1;
+                                    while (token_end > token && *token_end == ' ') {
+                                        *token_end = '\0';
+                                        token_end--;
+                                    }
+                                    if (*token != '\0') {
+                                        strncpy(t->links[t->link_count], token, MAX_PATH - 1);
+                                        t->links[t->link_count][MAX_PATH - 1] = '\0';
+                                        t->link_count++;
                                     }
                                     token = strtok(NULL, ",");
                                 }

@@ -25,3 +25,4 @@ behave ticket_notes.feature
 behave ticket_dependencies.feature
 behave ticket_query.feature
 behave ticket_listing.feature
+behave ticket_show.feature
