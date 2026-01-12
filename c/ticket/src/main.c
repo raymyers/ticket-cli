@@ -4,6 +4,8 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <unistd.h>
+#include <time.h>
+#include <openssl/sha.h>
 
 #define VERSION "0.1.0"
 #define TICKETS_DIR ".tickets"
@@ -101,10 +103,209 @@ static int cmd_not_implemented(const char *command) {
     return 1;
 }
 
+static void get_iso_date(char *buffer, size_t size) {
+    time_t now = time(NULL);
+    struct tm *utc = gmtime(&now);
+    strftime(buffer, size, "%Y-%m-%dT%H:%M:%SZ", utc);
+}
+
+static void generate_ticket_id(char *buffer, size_t size) {
+    char cwd[MAX_PATH];
+    if (getcwd(cwd, sizeof(cwd)) == NULL) {
+        snprintf(buffer, size, "tck-0000");
+        return;
+    }
+    
+    char *dir_name = strrchr(cwd, '/');
+    if (dir_name == NULL) {
+        dir_name = cwd;
+    } else {
+        dir_name++;
+    }
+    
+    char prefix[32] = {0};
+    int prefix_len = 0;
+    int in_segment = 0;
+    
+    for (const char *p = dir_name; *p && prefix_len < 10; p++) {
+        if (*p == '-' || *p == '_' || *p == ' ') {
+            in_segment = 0;
+        } else if (!in_segment) {
+            prefix[prefix_len++] = *p;
+            in_segment = 1;
+        }
+    }
+    
+    if (prefix_len == 0) {
+        strncpy(prefix, dir_name, 3);
+        prefix[3] = '\0';
+    } else {
+        prefix[prefix_len] = '\0';
+    }
+    
+    char entropy[256];
+    snprintf(entropy, sizeof(entropy), "%d%ld", getpid(), (long)time(NULL));
+    
+    unsigned char hash[SHA256_DIGEST_LENGTH];
+    SHA256((unsigned char*)entropy, strlen(entropy), hash);
+    
+    snprintf(buffer, size, "%s-%02x%02x", prefix, hash[0], hash[1]);
+}
+
+static void ensure_tickets_dir(void) {
+    struct stat st = {0};
+    if (stat(TICKETS_DIR, &st) == -1) {
+        mkdir(TICKETS_DIR, 0755);
+    }
+}
+
 static int cmd_create(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
-    return cmd_not_implemented("create");
+    ensure_tickets_dir();
+    
+    char title[1024] = "";
+    char description[4096] = "";
+    char design[4096] = "";
+    char acceptance[4096] = "";
+    int priority = 2;
+    char issue_type[64] = "task";
+    char assignee[256] = "";
+    char external_ref[256] = "";
+    char parent[64] = "";
+    
+    FILE *git_cmd = popen("git config user.name 2>/dev/null", "r");
+    if (git_cmd != NULL) {
+        if (fgets(assignee, sizeof(assignee), git_cmd) != NULL) {
+            size_t len = strlen(assignee);
+            if (len > 0 && assignee[len-1] == '\n') {
+                assignee[len-1] = '\0';
+            }
+        }
+        pclose(git_cmd);
+    }
+    
+    int i = 1;
+    while (i < argc) {
+        const char *arg = argv[i];
+        if (strcmp(arg, "-d") == 0 || strcmp(arg, "--description") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", arg);
+                return 1;
+            }
+            strncpy(description, argv[i + 1], sizeof(description) - 1);
+            i += 2;
+        } else if (strcmp(arg, "--design") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", arg);
+                return 1;
+            }
+            strncpy(design, argv[i + 1], sizeof(design) - 1);
+            i += 2;
+        } else if (strcmp(arg, "--acceptance") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", arg);
+                return 1;
+            }
+            strncpy(acceptance, argv[i + 1], sizeof(acceptance) - 1);
+            i += 2;
+        } else if (strcmp(arg, "-p") == 0 || strcmp(arg, "--priority") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", arg);
+                return 1;
+            }
+            priority = atoi(argv[i + 1]);
+            i += 2;
+        } else if (strcmp(arg, "-t") == 0 || strcmp(arg, "--type") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", arg);
+                return 1;
+            }
+            strncpy(issue_type, argv[i + 1], sizeof(issue_type) - 1);
+            i += 2;
+        } else if (strcmp(arg, "-a") == 0 || strcmp(arg, "--assignee") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", arg);
+                return 1;
+            }
+            strncpy(assignee, argv[i + 1], sizeof(assignee) - 1);
+            i += 2;
+        } else if (strcmp(arg, "--external-ref") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", arg);
+                return 1;
+            }
+            strncpy(external_ref, argv[i + 1], sizeof(external_ref) - 1);
+            i += 2;
+        } else if (strcmp(arg, "--parent") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", arg);
+                return 1;
+            }
+            strncpy(parent, argv[i + 1], sizeof(parent) - 1);
+            i += 2;
+        } else if (arg[0] == '-') {
+            fprintf(stderr, "Unknown option: %s\n", arg);
+            return 1;
+        } else {
+            strncpy(title, arg, sizeof(title) - 1);
+            i++;
+        }
+    }
+    
+    if (strlen(title) == 0) {
+        strcpy(title, "Untitled");
+    }
+    
+    char ticket_id[64];
+    generate_ticket_id(ticket_id, sizeof(ticket_id));
+    
+    char file_path[MAX_PATH];
+    snprintf(file_path, sizeof(file_path), "%s/%s.md", TICKETS_DIR, ticket_id);
+    
+    char now[32];
+    get_iso_date(now, sizeof(now));
+    
+    FILE *file = fopen(file_path, "w");
+    if (file == NULL) {
+        fprintf(stderr, "Error: cannot create ticket file\n");
+        return 1;
+    }
+    
+    fprintf(file, "---\n");
+    fprintf(file, "id: %s\n", ticket_id);
+    fprintf(file, "status: open\n");
+    fprintf(file, "deps: []\n");
+    fprintf(file, "links: []\n");
+    fprintf(file, "created: %s\n", now);
+    fprintf(file, "type: %s\n", issue_type);
+    fprintf(file, "priority: %d\n", priority);
+    if (strlen(assignee) > 0) {
+        fprintf(file, "assignee: %s\n", assignee);
+    }
+    if (strlen(external_ref) > 0) {
+        fprintf(file, "external-ref: %s\n", external_ref);
+    }
+    if (strlen(parent) > 0) {
+        fprintf(file, "parent: %s\n", parent);
+    }
+    fprintf(file, "---\n");
+    fprintf(file, "# %s\n\n", title);
+    
+    if (strlen(description) > 0) {
+        fprintf(file, "%s\n\n", description);
+    }
+    
+    if (strlen(design) > 0) {
+        fprintf(file, "## Design\n\n%s\n\n", design);
+    }
+    
+    if (strlen(acceptance) > 0) {
+        fprintf(file, "## Acceptance Criteria\n\n%s\n\n", acceptance);
+    }
+    
+    fclose(file);
+    
+    printf("%s\n", ticket_id);
+    return 0;
 }
 
 static int cmd_show(int argc, char *argv[]) {

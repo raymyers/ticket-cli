@@ -7,7 +7,7 @@ DEBUGFLAGS := -g -O0 -DDEBUG
 LDFLAGS :=
 # Libraries (uncomment when implementing features that require them)
 # LIBS := -lyaml -lcrypto -ljson-c
-LIBS :=
+LIBS := -lcrypto
 
 # Directories
 SRC_DIR := src
@@ -33,6 +33,11 @@ TEST_TARGET := $(BIN_DIR)/test_runner
 
 # Include paths
 INCLUDES := -I$(INC_DIR)
+# Add Homebrew OpenSSL paths for macOS
+ifeq ($(shell uname), Darwin)
+    INCLUDES += -I/opt/homebrew/include
+    LDFLAGS += -L/opt/homebrew/lib
+endif
 
 .PHONY: all clean test debug run install check lint format help
 
