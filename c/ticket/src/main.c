@@ -9,6 +9,8 @@
 #define TICKETS_DIR ".tickets"
 #define MAX_PATH 1024
 #define MAX_MATCHES 100
+#define MAX_LINKS 100
+#define MAX_TICKETS 100
 
 static void print_usage(const char *program_name) {
     printf("Ticket CLI - C Implementation\n");
@@ -24,7 +26,8 @@ static void print_usage(const char *program_name) {
     printf("  reopen <id>                 Set status to open\n");
     printf("  dep <id> <dep-id>           Add dependency\n");
     printf("  dep tree <id>               Show dependency tree\n");
-    printf("  link <id1> <id2>            Add symmetric link\n");
+    printf("  link <id> <id> [id...]      Add symmetric links\n");
+    printf("  unlink <id> <id>            Remove symmetric link\n");
     printf("  edit <id>                   Edit ticket in $EDITOR\n");
     printf("  add-note <id> <note>        Add note to ticket\n");
     printf("  query [options]             Query tickets (JSON output)\n");
@@ -298,7 +301,78 @@ static int cmd_dep(int argc, char *argv[]) {
     return 0;
 }
 
+static int parse_links(const char *file_path, char links[MAX_LINKS][MAX_PATH], int *link_count) {
+    FILE *file = fopen(file_path, "r");
+    if (file == NULL) {
+        return 1;
+    }
+    
+    *link_count = 0;
+    char line[1024];
+    int in_frontmatter = 0;
+    
+    while (fgets(line, sizeof(line), file) != NULL) {
+        if (strcmp(line, "---\n") == 0) {
+            in_frontmatter = !in_frontmatter;
+            continue;
+        }
+        
+        if (in_frontmatter && strncmp(line, "links:", 6) == 0) {
+            char *bracket = strchr(line, '[');
+            if (bracket != NULL) {
+                char *end = strchr(bracket, ']');
+                if (end != NULL) {
+                    *end = '\0';
+                    bracket++;
+                    if (*bracket != '\0' && *bracket != ']') {
+                        char *token = strtok(bracket, ",");
+                        while (token != NULL && *link_count < MAX_LINKS) {
+                            while (*token == ' ') token++;
+                            char *token_end = token + strlen(token) - 1;
+                            while (token_end > token && (*token_end == ' ' || *token_end == '\n')) {
+                                *token_end = '\0';
+                                token_end--;
+                            }
+                            if (*token != '\0') {
+                                strncpy(links[*link_count], token, MAX_PATH - 1);
+                                links[*link_count][MAX_PATH - 1] = '\0';
+                                (*link_count)++;
+                            }
+                            token = strtok(NULL, ",");
+                        }
+                    }
+                }
+            }
+            break;
+        }
+    }
+    
+    fclose(file);
+    return 0;
+}
+
+static int has_link(char links[MAX_LINKS][MAX_PATH], int link_count, const char *link_id) {
+    for (int i = 0; i < link_count; i++) {
+        if (strcmp(links[i], link_id) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static int add_link_to_file(const char *file_path, const char *link_id) {
+    char existing_links[MAX_LINKS][MAX_PATH];
+    int link_count = 0;
+    
+    if (parse_links(file_path, existing_links, &link_count) != 0) {
+        fprintf(stderr, "Error: cannot read ticket file\n");
+        return 1;
+    }
+    
+    if (has_link(existing_links, link_count, link_id)) {
+        return 0;
+    }
+    
     FILE *file = fopen(file_path, "r");
     if (file == NULL) {
         fprintf(stderr, "Error: cannot read ticket file\n");
@@ -353,9 +427,138 @@ static int add_link_to_file(const char *file_path, const char *link_id) {
     return 0;
 }
 
+static int remove_link_from_file(const char *file_path, const char *link_id) {
+    FILE *file = fopen(file_path, "r");
+    if (file == NULL) {
+        fprintf(stderr, "Error: cannot read ticket file\n");
+        return 1;
+    }
+    
+    char temp_path[MAX_PATH];
+    snprintf(temp_path, sizeof(temp_path), "%s.tmp", file_path);
+    FILE *temp_file = fopen(temp_path, "w");
+    if (temp_file == NULL) {
+        fclose(file);
+        fprintf(stderr, "Error: cannot write temp file\n");
+        return 1;
+    }
+    
+    char line[1024];
+    int in_frontmatter = 0;
+    while (fgets(line, sizeof(line), file) != NULL) {
+        if (strcmp(line, "---\n") == 0) {
+            fprintf(temp_file, "%s", line);
+            in_frontmatter = !in_frontmatter;
+            continue;
+        }
+        
+        if (in_frontmatter && strncmp(line, "links:", 6) == 0) {
+            char existing_links[MAX_LINKS][MAX_PATH];
+            int link_count = 0;
+            
+            char *bracket = strchr(line, '[');
+            if (bracket != NULL) {
+                char *end = strchr(bracket, ']');
+                if (end != NULL) {
+                    *end = '\0';
+                    bracket++;
+                    if (*bracket != '\0' && *bracket != ']') {
+                        char *token = strtok(bracket, ",");
+                        while (token != NULL && link_count < MAX_LINKS) {
+                            while (*token == ' ') token++;
+                            char *token_end = token + strlen(token) - 1;
+                            while (token_end > token && (*token_end == ' ' || *token_end == '\n')) {
+                                *token_end = '\0';
+                                token_end--;
+                            }
+                            if (*token != '\0' && strcmp(token, link_id) != 0) {
+                                strncpy(existing_links[link_count], token, MAX_PATH - 1);
+                                existing_links[link_count][MAX_PATH - 1] = '\0';
+                                link_count++;
+                            }
+                            token = strtok(NULL, ",");
+                        }
+                    }
+                }
+            }
+            
+            fprintf(temp_file, "links: [");
+            for (int i = 0; i < link_count; i++) {
+                if (i > 0) fprintf(temp_file, ", ");
+                fprintf(temp_file, "%s", existing_links[i]);
+            }
+            fprintf(temp_file, "]\n");
+            continue;
+        }
+        fprintf(temp_file, "%s", line);
+    }
+    
+    fclose(file);
+    fclose(temp_file);
+    
+    if (rename(temp_path, file_path) != 0) {
+        fprintf(stderr, "Error: cannot update ticket file\n");
+        unlink(temp_path);
+        return 1;
+    }
+    
+    return 0;
+}
+
 static int cmd_link(int argc, char *argv[]) {
     if (argc < 3) {
-        fprintf(stderr, "Error: two ticket IDs required\n");
+        fprintf(stderr, "Error: at least two ticket IDs required\n");
+        return 1;
+    }
+    
+    int num_tickets = argc - 1;
+    char resolved_paths[MAX_TICKETS][MAX_PATH];
+    char ticket_ids[MAX_TICKETS][MAX_PATH];
+    
+    for (int i = 0; i < num_tickets; i++) {
+        if (resolve_ticket_id(argv[i + 1], resolved_paths[i], sizeof(resolved_paths[i])) != 0) {
+            return 1;
+        }
+        
+        const char *basename = strrchr(resolved_paths[i], '/');
+        basename = basename ? basename + 1 : resolved_paths[i];
+        snprintf(ticket_ids[i], sizeof(ticket_ids[i]), "%.*s", (int)(strlen(basename) - 3), basename);
+    }
+    
+    int total_added = 0;
+    
+    for (int i = 0; i < num_tickets; i++) {
+        for (int j = 0; j < num_tickets; j++) {
+            if (i != j) {
+                char existing_links[MAX_LINKS][MAX_PATH];
+                int link_count = 0;
+                
+                if (parse_links(resolved_paths[i], existing_links, &link_count) != 0) {
+                    return 1;
+                }
+                
+                if (!has_link(existing_links, link_count, ticket_ids[j])) {
+                    if (add_link_to_file(resolved_paths[i], ticket_ids[j]) != 0) {
+                        return 1;
+                    }
+                    total_added++;
+                }
+            }
+        }
+    }
+    
+    if (total_added == 0) {
+        printf("All links already exist\n");
+    } else {
+        printf("Added %d link(s) between %d tickets\n", total_added, num_tickets);
+    }
+    
+    return 0;
+}
+
+static int cmd_unlink(int argc, char *argv[]) {
+    if (argc != 3) {
+        fprintf(stderr, "Error: exactly two ticket IDs required\n");
         return 1;
     }
     
@@ -378,14 +581,28 @@ static int cmd_link(int argc, char *argv[]) {
     basename2 = basename2 ? basename2 + 1 : resolved_path2;
     snprintf(id2, sizeof(id2), "%.*s", (int)(strlen(basename2) - 3), basename2);
     
-    if (add_link_to_file(resolved_path1, id2) != 0) {
+    char existing_links[MAX_LINKS][MAX_PATH];
+    int link_count = 0;
+    
+    if (parse_links(resolved_path1, existing_links, &link_count) != 0) {
+        fprintf(stderr, "Error: cannot read ticket file\n");
         return 1;
     }
     
-    if (add_link_to_file(resolved_path2, id1) != 0) {
+    if (!has_link(existing_links, link_count, id2)) {
+        printf("Link not found\n");
         return 1;
     }
     
+    if (remove_link_from_file(resolved_path1, id2) != 0) {
+        return 1;
+    }
+    
+    if (remove_link_from_file(resolved_path2, id1) != 0) {
+        return 1;
+    }
+    
+    printf("Removed link: %s <-> %s\n", id1, id2);
     return 0;
 }
 
@@ -449,6 +666,8 @@ int main(int argc, char *argv[]) {
         return cmd_dep(argc - 1, &argv[1]);
     } else if (strcmp(command, "link") == 0) {
         return cmd_link(argc - 1, &argv[1]);
+    } else if (strcmp(command, "unlink") == 0) {
+        return cmd_unlink(argc - 1, &argv[1]);
     } else if (strcmp(command, "edit") == 0) {
         return cmd_edit(argc - 1, &argv[1]);
     } else if (strcmp(command, "add-note") == 0) {
