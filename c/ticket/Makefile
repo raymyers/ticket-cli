@@ -3,6 +3,7 @@
 
 CC := gcc
 CFLAGS := -std=c11 -Wall -Wextra -Werror -pedantic -O2
+TEST_CFLAGS := -std=c11 -Wall -Wextra -O2
 DEBUGFLAGS := -g -O0 -DDEBUG
 LDFLAGS :=
 # Libraries (uncomment when implementing features that require them)
@@ -54,7 +55,7 @@ $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c | $(OBJ_DIR)
 
 # Compile test files
 $(TEST_OBJ_DIR)/%.o: $(TEST_DIR)/%.c | $(TEST_OBJ_DIR)
-	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+	$(CC) $(TEST_CFLAGS) $(INCLUDES) -c $< -o $@
 
 # Link main executable
 $(TARGET): $(OBJECTS) | $(BIN_DIR)

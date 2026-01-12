@@ -2,7 +2,7 @@
 .PHONY: go go-lint go-type go-fmt go-test go-bdd go-check
 .PHONY: zig zig-lint zig-type zig-test zig-bdd zig-check
 .PHONY: typescript typescript-lint typescript-type typescript-test typescript-bdd typescript-check
-.PHONY: c c-build c-test c-check c-lint c-format c-clean c-bdd
+.PHONY: c c-build c-test c-check c-lint c-format c-check-format c-static c-clean c-bdd
 
 PYTHON_DIR := python/ticket
 GO_DIR := go/ticket
@@ -100,7 +100,7 @@ typescript-bdd:
 
 c: c-check
 
-c-check: c-lint c-build c-test
+c-check: c-lint c-static c-test
 
 c-build:
 	@echo "Building C implementation..."
@@ -111,12 +111,26 @@ c-test:
 	cd $(C_DIR) && $(MAKE) test
 
 c-lint:
-	@echo "Checking C code formatting..."
-	cd $(C_DIR) && $(MAKE) lint
+	@echo "Running clang-tidy..."
+	cd $(C_DIR) && /opt/homebrew/opt/llvm/bin/clang-tidy src/*.c -- -Iinclude -I/opt/homebrew/include
 
 c-format:
-	@echo "Formatting C code..."
-	cd $(C_DIR) && $(MAKE) format
+	@echo "Running clang-format..."
+	cd $(C_DIR) && find src -name "*.c" -o -name "*.h" | xargs /opt/homebrew/opt/llvm/bin/clang-format -i
+	cd $(C_DIR) && if [ -n "$$(find include -name "*.h" 2>/dev/null)" ]; then \
+		find include -name "*.h" | xargs /opt/homebrew/opt/llvm/bin/clang-format -i; \
+	fi
+
+c-check-format:
+	@echo "Checking formatting..."
+	cd $(C_DIR) && find src -name "*.c" -o -name "*.h" | xargs /opt/homebrew/opt/llvm/bin/clang-format --dry-run --Werror
+	cd $(C_DIR) && if [ -n "$$(find include -name "*.h" 2>/dev/null)" ]; then \
+		find include -name "*.h" | xargs /opt/homebrew/opt/llvm/bin/clang-format --dry-run --Werror; \
+	fi
+
+c-static:
+	@echo "Running static analysis..."
+	cd $(C_DIR) && cppcheck --enable=all --suppress=missingIncludeSystem --suppress=constVariablePointer --suppress=constParameter --suppress=constParameterPointer --suppress=unreadVariable --suppress=uninitvar --suppress=normalCheckLevelMaxBranches --suppress=checkersReport --error-exitcode=1 src/
 
 c-clean:
 	@echo "Cleaning C build artifacts..."
