@@ -45,7 +45,7 @@ def format_system_prompt(data: dict) -> Text:
     result.append("src=", style="dim")
     result.append(source, style="cyan")
     result.append("]", style="dim")
-    result.append("\n")
+    result.append(" ")
     result.append(truncate(text, 60), style="dim")
     return result
 
@@ -67,13 +67,12 @@ def format_message(data: dict, truncate_text: bool=True) -> Text:
     result.append("Message  ", style="blue")
     result.append(role, style="cyan")
     result.append("]", style="dim")
+    result.append(" ")
 
     if truncate_text:
         text = text.replace("\n", " ")
-        result.append("\n")
         result.append(truncate(text, 70), style="dim")
     else:
-        result.append("\n")
         result.append(text, style="dim")
 
     return result
@@ -95,13 +94,13 @@ def format_action(data: dict) -> Text:
         result.append(":", style="dim")
         result.append(cmd, style="cyan")
         result.append("]", style="dim")
-        result.append("\n→ ")
+        result.append(" → ")
         result.append(path, style="dim")
     elif tool == "terminal":
         cmd = action.get("command", "").replace("\n", " ")
         result.append("terminal", style="yellow")
         result.append("]", style="dim")
-        result.append("\n")
+        result.append(" ")
         result.append(truncate(cmd, 75), style="dim")
     else:
         thought = data.get("thought", [])
@@ -111,7 +110,7 @@ def format_action(data: dict) -> Text:
         thought_text = thought_text.replace("\n", " ")
         result.append(tool, style="yellow")
         result.append("]", style="dim")
-        result.append("\n")
+        result.append(" ")
         result.append(truncate(thought_text, 70), style="dim")
 
     return result
@@ -138,13 +137,12 @@ def format_observation(data: dict) -> Text:
     result.append("Obs  ", style="yellow")
     result.append(tool, style="dim cyan")
     result.append("]", style="dim")
+    result.append(" ")
 
     if is_error:
-        result.append("\n")
         result.append("[ERR] ", style="red")
         result.append(truncate(text, 65), style="dim")
     else:
-        result.append("\n")
         result.append(truncate(text, 70), style="dim")
 
     return result
@@ -156,7 +154,7 @@ def format_unknown(event_type: str, data: dict) -> Text:
     result.append("[", style="dim")
     result.append(event_type, style="red")
     result.append("]", style="dim")
-    result.append("\nkeys=")
+    result.append(" keys=", style="dim")
     result.append(str(keys), style="dim")
     return result
 
