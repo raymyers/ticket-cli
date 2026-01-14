@@ -1,19 +1,12 @@
 ;;; utils.lisp - Utility functions for ticket-cli
-;;;
-;;; Contains helper functions for ID generation, timestamps, file operations.
-;;; Written in Common Lisp with ACL2-compatible style where possible.
 
 (in-package :ticket)
 
-;;; Constants
 (defconstant +tickets-dir+ ".tickets")
 
-;;; String utilities
-
 (defun split-string (string delimiter)
-  "Split STRING by DELIMITER character, returning list of substrings."
-  (let ((result nil)
-        (start 0))
+  "Split STRING by DELIMITER character."
+  (let ((result nil) (start 0))
     (loop for i from 0 below (length string)
           when (char= (char string i) delimiter)
           do (when (> i start)
@@ -24,137 +17,80 @@
     (nreverse result)))
 
 (defun string-starts-with (string prefix)
-  "Check if STRING starts with PREFIX."
   (and (>= (length string) (length prefix))
        (string= string prefix :end1 (length prefix))))
 
 (defun trim-whitespace (string)
-  "Remove leading and trailing whitespace from STRING."
   (string-trim '(#\Space #\Tab #\Newline #\Return) string))
 
-;;; SHA256 hashing
-
-(defun sha256-via-shell (string)
-  "Compute SHA256 hash of STRING using shell command.
-   Returns hex digest as lowercase string."
-  (let* ((cmd (format nil "printf '%s' '~A' | sha256sum 2>/dev/null || printf '%s' '~A' | shasum -a 256"
-                      string string))
-         (output (with-output-to-string (s)
-                   ;; Use uiop for portable process execution
-                   (let ((process (sb-ext:run-program "/bin/sh"
-                                                      (list "-c" cmd)
-                                                      :output s
-                                                      :error nil
-                                                      :wait t)))
-                     (declare (ignore process)))))
-         (hash-line (trim-whitespace output)))
-    ;; SHA256 output is "hash  -" or "hash  filename", take first 64 chars
-    (subseq hash-line 0 (min 64 (or (position #\Space hash-line) 64)))))
+(defun run-shell-command (cmd)
+  "Run shell command, return output as string."
+  (with-output-to-string (s)
+    (sb-ext:run-program "/bin/sh" (list "-c" cmd) :output s :error nil :wait t)))
 
 (defun sha256-hex (string)
-  "Return SHA256 hex digest of STRING."
-  (sha256-via-shell string))
+  "Return SHA256 hex digest of STRING via shell."
+  (let ((output (run-shell-command
+                  (format nil "printf '%s' '~A' | sha256sum | cut -c1-64" string))))
+    (trim-whitespace output)))
 
-;;; Timestamp utilities
+(defun get-pid ()
+  "Get current process ID via shell."
+  (parse-integer (trim-whitespace (run-shell-command "echo $$")) :junk-allowed t))
 
 (defun iso-timestamp ()
-  "Return current UTC time in ISO 8601 format: YYYY-MM-DDTHH:MM:SSZ"
+  "Return current UTC time in ISO 8601 format."
   (multiple-value-bind (second minute hour date month year)
-      (decode-universal-time (get-universal-time) 0) ; 0 = UTC
+      (decode-universal-time (get-universal-time) 0)
     (format nil "~4,'0D-~2,'0D-~2,'0DT~2,'0D:~2,'0D:~2,'0DZ"
             year month date hour minute second)))
 
-;;; Directory utilities
-
 (defun get-current-directory-name ()
-  "Get the name of the current working directory."
+  "Get name of current working directory."
   (let* ((cwd (truename "."))
          (dir-list (pathname-directory cwd)))
     (if (and dir-list (listp dir-list))
-        (let ((last-component (car (last dir-list))))
-          (if (stringp last-component)
-              last-component
-              ;; Handle case where directory component might not be string
-              (format nil "~A" last-component)))
+        (let ((last-comp (car (last dir-list))))
+          (if (stringp last-comp) last-comp (format nil "~A" last-comp)))
         "unknown")))
 
 (defun extract-directory-prefix (dir-name)
-  "Extract prefix from directory name by taking first letter of each segment.
-   Segments are split on - or _. Falls back to first 3 chars if no segments."
+  "Extract prefix: first letter of each segment split on - or _."
   (let* ((normalized (substitute #\Space #\_ (substitute #\Space #\- dir-name)))
-         (segments (split-string normalized #\Space))
-         (filtered (remove-if (lambda (s) (zerop (length s))) segments)))
+         (segments (remove-if (lambda (s) (zerop (length s)))
+                              (split-string normalized #\Space))))
     (cond
-      ;; Multiple segments: take first letter of each
-      ((> (length filtered) 1)
-       (coerce (mapcar (lambda (s) (char s 0)) filtered) 'string))
-      ;; Single segment or empty: take first 3 chars
-      ((and filtered (first filtered))
-       (let ((s (first filtered)))
-         (subseq s 0 (min 3 (length s)))))
-      ;; Fallback
+      ((> (length segments) 1)
+       (coerce (mapcar (lambda (s) (char s 0)) segments) 'string))
+      ((and segments (first segments))
+       (subseq (first segments) 0 (min 3 (length (first segments)))))
       (t (subseq dir-name 0 (min 3 (length dir-name)))))))
 
-;;; ID generation
-
 (defun generate-id ()
-  "Generate ticket ID from directory prefix + timestamp hash.
-   Format: {prefix}-{4-char-hash}"
-  (let* ((dir-name (get-current-directory-name))
-         (prefix (string-downcase (extract-directory-prefix dir-name)))
-         ;; Generate entropy from PID and timestamp
-         (pid #+sbcl (sb-posix:getpid)
-              #-sbcl 0)
-         (timestamp (get-universal-time))
-         (entropy (format nil "~D~D" pid timestamp))
-         (hash (sha256-hex entropy))
-         (short-hash (subseq hash 0 4)))
-    (format nil "~A-~A" prefix short-hash)))
-
-;;; File system utilities
+  "Generate ticket ID: {prefix}-{4-char-hash}."
+  (let* ((prefix (string-downcase (extract-directory-prefix (get-current-directory-name))))
+         (entropy (format nil "~D~D" (get-pid) (get-universal-time)))
+         (hash (sha256-hex entropy)))
+    (format nil "~A-~A" prefix (subseq hash 0 4))))
 
 (defun ensure-tickets-dir ()
-  "Ensure the .tickets directory exists."
   (ensure-directories-exist (format nil "~A/" +tickets-dir+)))
 
 (defun ticket-file-path (ticket-id)
-  "Return the file path for a ticket with given ID."
   (format nil "~A/~A.md" +tickets-dir+ ticket-id))
 
-(defun file-exists-p* (path)
-  "Check if file exists at PATH."
-  (probe-file path))
-
-(defun read-file-contents (path)
-  "Read entire file contents as string."
-  (with-open-file (stream path :direction :input)
-    (let ((contents (make-string (file-length stream))))
-      (read-sequence contents stream)
-      contents)))
-
 (defun write-file-contents (path contents)
-  "Write CONTENTS string to file at PATH."
   (ensure-directories-exist path)
-  (with-open-file (stream path
-                          :direction :output
-                          :if-exists :supersede
-                          :if-does-not-exist :create)
+  (with-open-file (stream path :direction :output
+                          :if-exists :supersede :if-does-not-exist :create)
     (write-string contents stream)))
 
-;;; Git utilities
-
 (defun get-git-user-name ()
-  "Get git config user.name, or NIL if not available."
+  "Get git config user.name, or NIL."
   (handler-case
       (let ((output (with-output-to-string (s)
-                      (sb-ext:run-program "git"
-                                          '("config" "user.name")
-                                          :output s
-                                          :error nil
-                                          :wait t
-                                          :search t))))
+                      (sb-ext:run-program "git" '("config" "user.name")
+                        :output s :error nil :wait t :search t))))
         (let ((trimmed (trim-whitespace output)))
-          (if (plusp (length trimmed))
-              trimmed
-              nil)))
+          (if (plusp (length trimmed)) trimmed nil)))
     (error () nil)))
