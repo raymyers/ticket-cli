@@ -105,6 +105,50 @@
 
 
 ;;; ============================================================
+;;; Theorems - Proved properties about the functions above
+;;; ============================================================
+
+;; 1. Type correctness: build-ticket-content returns a string
+(defthm build-ticket-content-returns-string
+  (stringp (build-ticket-content id title ticket-type priority timestamp)))
+
+;; 2. Structural: frontmatter starts with YAML delimiter
+(defthm frontmatter-starts-with-delimiter
+  (equal (car (build-frontmatter id title ticket-type priority timestamp))
+         "---"))
+
+;; 3. Structural: frontmatter has exactly 11 elements
+(defthm frontmatter-has-11-elements
+  (equal (len (build-frontmatter id title ticket-type priority timestamp))
+         11))
+
+;; 4. Correctness: char-downcase-simple produces lowercase for A-Z
+(defthm char-downcase-produces-lowercase
+  (implies (and (characterp c)
+                (char>= c #\A)
+                (char<= c #\Z))
+           (and (char>= (char-downcase-simple c) #\a)
+                (char<= (char-downcase-simple c) #\z))))
+
+;; 5. Correctness: char-downcase-simple is idempotent
+(defthm char-downcase-idempotent
+  (equal (char-downcase-simple (char-downcase-simple c))
+         (char-downcase-simple c)))
+
+;; 6. Type correctness: downcase-chars returns a list
+(defthm downcase-chars-returns-list
+  (true-listp (downcase-chars chars)))
+
+;; 7. Type correctness: string-downcase-simple returns a string
+(defthm string-downcase-returns-string
+  (stringp (string-downcase-simple s)))
+
+;; 8. Type correctness: extract-prefix returns a string
+(defthm extract-prefix-returns-string
+  (stringp (extract-prefix dir-name)))
+
+
+;;; ============================================================
 ;;; I/O functions (program mode - not proved, but ACL2 admits them)
 ;;; ============================================================
 
