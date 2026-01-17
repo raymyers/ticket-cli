@@ -10,7 +10,7 @@
 import os
 import subprocess
 import argparse
-import readline
+import readline  # noqa: F401
 
 from rich.console import Console
 from rich.text import Text
@@ -23,8 +23,23 @@ from openhands.tools.task_tracker import TaskTrackerTool
 from openhands.tools.terminal import TerminalTool
 from openhands.tools.glob import GlobTool
 from openhands.tools.grep import GrepTool
+from openhands.tools.browser_use import BrowserToolSet
 
 console = Console()
+
+# Color scheme: "Calm Ops" - professional, low fatigue
+# Blue = intent, Green = result, Purple = artifact
+LABEL_ACTION = "bright_cyan"       # #38BDF8 sky-400 - intent/actions
+LABEL_OBS = "bright_green"         # #22C55E green-500 - results
+LABEL_MESSAGE = "bright_cyan"      # #38BDF8 sky-400 - messages
+LABEL_SYSPROMPT = "magenta"        # System prompts
+TOOL = "bright_magenta"            # #A78BFA violet-400 - tool names
+COMMAND = "bright_magenta"         # #A78BFA violet-400 - commands
+PATH = "bright_magenta"            # #A78BFA violet-400 - file paths/artifacts
+ERROR = "bright_red"               # #F87171 red-400 - errors
+WARNING = "yellow"                 # #FBBF24 amber-400 - warnings
+BRACKET = "dim"                    # De-emphasized structure
+SECONDARY = "dim"                  # #94A3B8 slate-400 - secondary text
 
 def truncate(s: str, max_len: int) -> str:
     """Truncate string with ellipsis if needed."""
@@ -40,13 +55,13 @@ def format_system_prompt(data: dict) -> Text:
     text = text.replace("\n", " ")
 
     result = Text()
-    result.append("[", style="dim")
-    result.append("SysPrompt  ", style="magenta")
-    result.append("src=", style="dim")
-    result.append(source, style="cyan")
-    result.append("]", style="dim")
-    result.append(" ")
-    result.append(truncate(text, 60), style="dim")
+    result.append("[", style=BRACKET)
+    result.append("SysPrompt", style=LABEL_SYSPROMPT)
+    result.append("]", style=BRACKET)
+    result.append("  ", style=BRACKET)
+    result.append(source, style=TOOL)
+    result.append("  ", style=SECONDARY)
+    result.append(truncate(text, 60), style=SECONDARY)
     return result
 
 def format_message(data: dict, truncate_text: bool=True) -> Text:
@@ -63,17 +78,18 @@ def format_message(data: dict, truncate_text: bool=True) -> Text:
             text = str(first)
 
     result = Text()
-    result.append("[", style="dim")
-    result.append("Message  ", style="blue")
-    result.append(role, style="cyan")
-    result.append("]", style="dim")
-    result.append(" ")
+    result.append("[", style=BRACKET)
+    result.append("Message  ", style=LABEL_MESSAGE)  # Padded to 9 chars
+    result.append("]", style=BRACKET)
+    result.append("  ", style=BRACKET)
+    result.append(role, style=TOOL)
+    result.append("  ", style=SECONDARY)
 
     if truncate_text:
         text = text.replace("\n", " ")
-        result.append(truncate(text, 70), style="dim")
+        result.append(truncate(text, 70), style=SECONDARY)
     else:
-        result.append(text, style="dim")
+        result.append(text, style=SECONDARY)
 
     return result
 
@@ -83,35 +99,34 @@ def format_action(data: dict) -> Text:
     action = data.get("action", {})
 
     result = Text()
-    result.append("[", style="dim")
-    result.append("Action  ", style="green")
+    result.append("[", style=BRACKET)
+    result.append("Action   ", style=LABEL_ACTION)  # Padded to 9 chars
+    result.append("]", style=BRACKET)
+    result.append("  ", style=BRACKET)
 
     if tool == "file_editor":
         cmd = action.get("command", "?")
         path = action.get("path", "")
         path = path.split("/")[-1] if path else "?"
-        result.append(tool, style="yellow")
-        result.append(":", style="dim")
-        result.append(cmd, style="cyan")
-        result.append("]", style="dim")
-        result.append(" → ")
-        result.append(path, style="dim")
+        result.append(tool, style=TOOL)
+        result.append(":", style=BRACKET)
+        result.append(cmd, style=COMMAND)
+        result.append("  ", style=SECONDARY)
+        result.append(path, style=PATH)
     elif tool == "terminal":
         cmd = action.get("command", "").replace("\n", " ")
-        result.append("terminal", style="yellow")
-        result.append("]", style="dim")
-        result.append(" ")
-        result.append(truncate(cmd, 75), style="dim")
+        result.append("terminal", style=TOOL)
+        result.append("  ", style=SECONDARY)
+        result.append(truncate(cmd, 75), style=COMMAND)
     else:
         thought = data.get("thought", [])
         thought_text = ""
         if thought and isinstance(thought[0], dict):
             thought_text = thought[0].get("text", "")
         thought_text = thought_text.replace("\n", " ")
-        result.append(tool, style="yellow")
-        result.append("]", style="dim")
-        result.append(" ")
-        result.append(truncate(thought_text, 70), style="dim")
+        result.append(tool, style=TOOL)
+        result.append("  ", style=SECONDARY)
+        result.append(truncate(thought_text, 70), style=SECONDARY)
 
     return result
 
@@ -133,17 +148,18 @@ def format_observation(data: dict) -> Text:
     text = text.replace("\n", " ")
 
     result = Text()
-    result.append("[", style="dim")
-    result.append("Obs  ", style="yellow")
-    result.append(tool, style="dim cyan")
-    result.append("]", style="dim")
-    result.append(" ")
+    result.append("[", style=BRACKET)
+    result.append("Obs      ", style=LABEL_OBS)  # Padded to 9 chars
+    result.append("]", style=BRACKET)
+    result.append("  ", style=BRACKET)
+    result.append(tool, style=TOOL)
+    result.append("  ", style=SECONDARY)
 
     if is_error:
-        result.append("[ERR] ", style="red")
-        result.append(truncate(text, 65), style="dim")
+        result.append("[ERR] ", style=ERROR)
+        result.append(truncate(text, 65), style=SECONDARY)
     else:
-        result.append(truncate(text, 70), style="dim")
+        result.append(truncate(text, 70), style=SECONDARY)
 
     return result
 
@@ -151,11 +167,11 @@ def format_unknown(event_type: str, data: dict) -> Text:
     """Unknown event type: Show type and first few keys."""
     keys = list(data.keys())[:5]
     result = Text()
-    result.append("[", style="dim")
-    result.append(event_type, style="red")
-    result.append("]", style="dim")
-    result.append(" keys=", style="dim")
-    result.append(str(keys), style="dim")
+    result.append("[", style=BRACKET)
+    result.append(event_type, style=WARNING)
+    result.append("]", style=BRACKET)
+    result.append(" keys=", style=SECONDARY)
+    result.append(str(keys), style=SECONDARY)
     return result
 
 class MinimalVisualizer(ConversationVisualizerBase):
@@ -174,10 +190,10 @@ class MinimalVisualizer(ConversationVisualizerBase):
         else:
             console.print(format_unknown(type(event).__name__, event.model_dump()))
             event_text = Text()
-            event_text.append("\n\n[EVENT] ", style="dim")
-            event_text.append(type(event).__name__, style="red")
-            event_text.append(": ", style="dim")
-            event_text.append(event.model_dump_json()[:200] + "...", style="dim")
+            event_text.append("\n\n[EVENT] ", style=SECONDARY)
+            event_text.append(type(event).__name__, style=WARNING)
+            event_text.append(": ", style=SECONDARY)
+            event_text.append(event.model_dump_json()[:200] + "...", style=SECONDARY)
             console.print(event_text)
 
 class InteractiveVisualizer(ConversationVisualizerBase):
@@ -199,10 +215,10 @@ class InteractiveVisualizer(ConversationVisualizerBase):
         else:
             console.print(format_unknown(type(event).__name__, event.model_dump()))
             event_text = Text()
-            event_text.append("\n\n[EVENT] ", style="dim")
-            event_text.append(type(event).__name__, style="red")
-            event_text.append(": ", style="dim")
-            event_text.append(event.model_dump_json()[:200] + "...", style="dim")
+            event_text.append("\n\n[EVENT] ", style=SECONDARY)
+            event_text.append(type(event).__name__, style=WARNING)
+            event_text.append(": ", style=SECONDARY)
+            event_text.append(event.model_dump_json()[:200] + "...", style=SECONDARY)
             console.print(event_text)
 
 def run_agent(llm: LLM, prompt: str):
@@ -212,6 +228,7 @@ def run_agent(llm: LLM, prompt: str):
             Tool(name=TerminalTool.name),
             Tool(name=FileEditorTool.name),
             Tool(name=TaskTrackerTool.name),
+            Tool(name=BrowserToolSet.name),
         ]
     )
 
@@ -302,7 +319,7 @@ def run_interactive(llm: LLM, args):
             break
 
 def run_ticket_agent(llm, args):
-    for i in range(args.num_iterations):
+    for i in range(20):
         ticket_id = next_ticket()
         if not ticket_id:
             print("No work on the hopper! Try -i")
@@ -311,7 +328,8 @@ def run_ticket_agent(llm, args):
         print(f"═══ Iteration {i+1} ═══")
         prompt = f"""
         * Do only the task in `{ticket_file}`.
-        * Record your learnings with `./ticket add-note "..."`
+        * Record your progress and obstacles with `./ticket add-note {ticket_id} "..."`
+        * Update AGENTS.md (short) and docs/ with learnings if needed.
         * If complete use `./ticket close {ticket_id}` to mark it complete
         * Commit progress if tests pass
         * Commit .tickets updates if needed
